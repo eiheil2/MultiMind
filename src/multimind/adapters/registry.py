@@ -107,7 +107,10 @@ def init_default_providers() -> None:
     """初始化默认 provider（框架验证用）。
 
     实际使用时，provider 配置从 ``~/.multimind/config.toml`` 加载。
+    没有配置 API key 的 provider 会被跳过，不注册。
     """
+    import os
+
     configs: list[ProviderConfig] = [
         ProviderConfig(
             name="gemini-cli",
@@ -122,6 +125,7 @@ def init_default_providers() -> None:
             name="groq",
             channel=ChannelType.API_CLIENT,
             model="llama-3.3-70b",
+            api_key=os.environ.get("GROQ_API_KEY", ""),
             tags=("free", "fast"),
             priority=20,
             daily_quota=14_400,
@@ -146,5 +150,22 @@ def init_default_providers() -> None:
             max_tokens=32_000,
         ),
     ]
+
+    skipped: list[str] = []
     for cfg in configs:
+        # API 通道无 key 则跳过
+        if cfg.channel == ChannelType.API_CLIENT and not cfg.api_key:
+            skipped.append(cfg.name)
+            logger.info("Skipping provider '%s' (no API key)", cfg.name)
+            continue
         _registry.register(cfg)
+
+    if skipped:
+        import sys
+
+        print(
+            f"\n[提示] 以下 API provider 未配置密钥，已跳过: {', '.join(skipped)}\n"
+            f"  设置环境变量后可用，例如: export GROQ_API_KEY=your_key\n"
+            f"  其他 provider 仍可正常使用。\n",
+            file=sys.stderr,
+        )

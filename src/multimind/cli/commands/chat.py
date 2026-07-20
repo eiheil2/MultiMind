@@ -56,7 +56,8 @@ def _interactive(orchestrator: Orchestrator) -> None:
     """交互式群聊。"""
     console.print(Panel.fit(
         "[bold]MultiMind[/] — 多 AI 协作 CLI Agent\n"
-        "输入消息开始群聊，[/]退出。命令: /flatten /rebuild /status /help",
+        "输入消息开始群聊，输入 /exit 退出\n"
+        "命令: /flatten /rebuild /status /help",
         title="欢迎使用",
         border_style="green",
     ))

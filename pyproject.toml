@@ -57,7 +57,7 @@ Issues = "https://github.com/multimind/multimind/issues"
 Changelog = "https://github.com/multimind/multimind/blob/main/CHANGELOG.md"
 
 [project.scripts]
-multimind = "multimind.cli.main:main"
+multimind = "multimind.cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

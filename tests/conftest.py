@@ -35,22 +35,26 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(autouse=True)
-def _reset_registry() -> Iterator[None]:
+def _reset_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Reset the global ``ProviderRegistry`` singleton around every test.
 
     The registry is a module-level singleton shared across the whole
     process.  Without a reset, providers registered by one test would
     leak into the next.  This autouse fixture wipes the registry before
     the test runs and again on teardown for good measure.
+
+    Also sets a dummy ``GROQ_API_KEY`` so that ``init_default_providers``
+    registers the Groq provider during tests.
     """
 
+    monkeypatch.setenv("GROQ_API_KEY", "test-key-for-ci")
     reset_registry()
     yield
     reset_registry()
 
 
 @pytest.fixture
-def default_providers() -> ProviderRegistry:
+def default_providers(monkeypatch: pytest.MonkeyPatch) -> ProviderRegistry:
     """Provide a registry pre-populated with the default providers.
 
     The fixture resets the singleton first (defensively, even though the
@@ -58,6 +62,7 @@ def default_providers() -> ProviderRegistry:
     providers used throughout the codebase.
     """
 
+    monkeypatch.setenv("GROQ_API_KEY", "test-key-for-ci")
     reset_registry()
     init_default_providers()
     return get_registry()
