@@ -182,7 +182,7 @@ echo ""
 
 # 检测是否运行在 Termux 环境中
 IS_TERMUX=false
-if [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q "com.termux"; then
+if [ -n "${PREFIX:-}" ] && echo "$PREFIX" | grep -q "com.termux"; then
     IS_TERMUX=true
 fi
 
