@@ -14,7 +14,7 @@ from multimind.core.constants import DEFAULT_CONFIG_PATH
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["AppConfig", "GitConfigSpec", "MemoryConfigSpec", "load_config"]
+__all__ = ["AppConfig", "GitConfigSpec", "MemoryConfigSpec", "load_config", "update_config", "get_config_value"]
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +118,121 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         roles=data.get("roles", []),
         api_keys=data.get("api_keys", {}),
     )
+
+
+# ── 运行时配置读写 ────────────────────────────────────────────────────
+
+# general 段可设置的键及其类型
+_SETTABLE_KEYS: dict[str, type] = {
+    "language": str,
+    "topology": str,
+    "default_provider": str,
+    "tool_permission": str,
+    "auto_commit": bool,
+    "output_dir": str,
+}
+
+# logging 段可设置的键
+_LOGGING_KEYS: dict[str, type] = {
+    "log_level": str,
+}
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    """读取 TOML 文件，不存在则返回空 dict。"""
+    if not path.exists():
+        return {}
+    try:
+        import tomllib  # type: ignore[import-not-found]
+    except ImportError:
+        import tomli as tomllib  # type: ignore[import-not-found]
+
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def _write_toml(path: Path, data: dict[str, Any]) -> None:
+    """写入 TOML 文件。"""
+    import tomli_w
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(data, f)
+
+
+def update_config(
+    key: str,
+    value: str,
+    config_path: Path | None = None,
+) -> str:
+    """更新配置文件中的单个键值。
+
+    支持的键: language, topology, default_provider, tool_permission,
+    auto_commit, output_dir, log_level, api_key.
+
+    Args:
+        key: 配置键名。
+        value: 配置值（字符串形式，内部自动转换类型）。
+        config_path: 配置文件路径，None 则使用默认路径。
+
+    Returns:
+        操作结果描述。
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+    data = _read_toml(path)
+
+    # API Key 特殊处理
+    if key == "api_key":
+        parts = value.split(maxsplit=1)
+        if len(parts) != 2:
+            return "用法: /set api_key <provider> <key>"
+        provider, api_key = parts
+        api_keys = data.get("api_keys", {})
+        api_keys[provider] = api_key
+        data["api_keys"] = api_keys
+        _write_toml(path, data)
+        return f"已设置 {provider} 的 API Key"
+
+    # auto_commit 类型转换
+    if key in _SETTABLE_KEYS:
+        section = data.setdefault("general", {})
+        expected_type = _SETTABLE_KEYS[key]
+
+        if expected_type is bool:
+            section[key] = value.lower() in ("true", "1", "yes", "on")
+        else:
+            section[key] = value
+        _write_toml(path, data)
+        return f"已设置 {key} = {section[key]}"
+
+    # log_level 在 logging 段
+    if key in _LOGGING_KEYS:
+        section = data.setdefault("logging", {})
+        section["level"] = value.upper()
+        _write_toml(path, data)
+        return f"已设置 log_level = {section['level']}"
+
+    available = ", ".join(list(_SETTABLE_KEYS.keys()) + list(_LOGGING_KEYS.keys()) + ["api_key"])
+    return f"未知配置项: {key}\n可设置: {available}"
+
+
+def get_config_value(key: str, config_path: Path | None = None) -> Any:
+    """读取配置文件中的单个键值。
+
+    Args:
+        key: 配置键名。
+        config_path: 配置文件路径。
+
+    Returns:
+        配置值，不存在则返回 None。
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+    data = _read_toml(path)
+
+    if key in _SETTABLE_KEYS:
+        return data.get("general", {}).get(key)
+    if key in _LOGGING_KEYS:
+        return data.get("logging", {}).get("level")
+    if key == "api_keys":
+        return data.get("api_keys", {})
+    return None

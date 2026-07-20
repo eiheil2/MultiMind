@@ -47,10 +47,12 @@ def stats_command() -> None:
     table.add_column("优先级", justify="right")
 
     for adapter in orch.registry.all().values():
+        daily = adapter.config.daily_quota
+        remaining_str = "∞" if daily < 0 else str(adapter.remaining_quota)
         table.add_row(
             adapter.config.name,
             adapter.channel_type.value,
-            str(adapter.remaining_quota),
+            remaining_str,
             str(adapter.config.priority),
         )
     console.print(table)
