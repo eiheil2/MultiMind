@@ -51,9 +51,8 @@ class PublicEndpointAdapter(AIAdapter):
 
         # TODO: 实际实现 — httpx + 无 Authorization header
         # 框架验证：模拟公共端点流式输出
-        yield f"[公共·{self.config.name}] "
         await asyncio.sleep(0.02)
-        response = f"收到指令：{prompt[:40]}。零鉴权端点响应中..."
+        response = f"Received task via public endpoint ({self.config.name}). Zero-auth processing complete."
         for word in response.split():
             yield word + " "
             await asyncio.sleep(0.01)

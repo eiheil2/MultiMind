@@ -221,9 +221,8 @@ class BrowserAdapter(AIAdapter):
 
         # 无站点适配器 → 桩模式
         if self._site_adapter is None:
-            yield f"[网页·{self.config.name}] "
             await asyncio.sleep(0.1)
-            yield f"未配置站点适配器，桩模式输出：{prompt[:40]}"
+            yield f"Site adapter not configured. Stub mode output: {prompt[:40]}"
             self.record_usage()
             return
 
@@ -232,9 +231,8 @@ class BrowserAdapter(AIAdapter):
             page = await self._ensure_browser()
         except AdapterError as e:
             # Playwright 未安装 → 降级桩模式
-            yield f"[网页·{self.config.name}] "
             await asyncio.sleep(0.1)
-            yield f"Playwright 未安装，桩模式输出：{prompt[:40]}"
+            yield f"Playwright not installed. Stub mode output: {prompt[:40]}"
             logger.warning("BrowserAdapter: Playwright unavailable — %s", e)
             self.record_usage()
             return

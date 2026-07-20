@@ -65,9 +65,8 @@ class APIClientAdapter(AIAdapter):
 
         # TODO: 实际实现 — httpx.AsyncClient + SSE 流式解析
         # 框架验证：模拟 API 流式输出
-        yield f"[API·{self.config.name}] "
         await asyncio.sleep(0.03)
-        response = f"收到指令：{prompt[:40]}。通过API密钥调用中..."
+        response = f"Received task via API channel ({self.config.name}). Processing with API key authentication... Done."
         for word in response.split():
             yield word + " "
             await asyncio.sleep(0.015)

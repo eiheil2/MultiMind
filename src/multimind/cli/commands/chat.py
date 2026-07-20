@@ -19,9 +19,6 @@ from datetime import datetime
 
 import typer
 from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.text import Text
 
 from multimind.adapters.registry import init_default_providers
 from multimind.config.settings import get_config_value, load_config, update_config
@@ -174,7 +171,8 @@ def chat_command(
         return
 
     init_default_providers()
-    orchestrator = Orchestrator()
+    cfg = load_config()
+    orchestrator = Orchestrator(language=cfg.language)
 
     if flatten:
         asyncio.run(orchestrator.topology.flatten())
@@ -189,8 +187,13 @@ def _run_headless(orchestrator: Orchestrator, message: str) -> None:
     """非交互模式：Headless 流式输出。"""
 
     async def _run() -> None:
-        async for chunk in orchestrator.run(message, max_rounds=2):
-            console.print(chunk, end="")
+        from multimind.engine.orchestrator import OrchestratorEvent
+
+        async for event in orchestrator.run(message, max_rounds=2):
+            if event.event_type == OrchestratorEvent.ROLE_CHUNK:
+                console.print(event.content, end="")
+            elif event.event_type == OrchestratorEvent.ROUND_END:
+                console.print()
 
     asyncio.run(_run())
 
@@ -500,43 +503,91 @@ def _tab_complete(buf: str) -> str:
 
 def _print_user_message(text: str) -> None:
     """打印用户消息 — 极简风格，无气泡框。"""
-    console.print(f"[{C_USER}]你[/] {text}")
+    console.print(f"[{C_USER}]❯[/] {text}")
+
+
+# 角色层级的显示标签
+_TIER_LABELS = {
+    "leader": ("◆", C_ACCENT, "Leader"),
+    "dispatcher": ("◇", C_WARNING, "Dispatcher"),
+    "executor": ("▪", C_SUCCESS, "Executor"),
+}
 
 
 async def _run_chat(orchestrator: Orchestrator, user_input: str) -> None:
-    """运行一轮群聊 — 流式输出 + Spinner。"""
-    console.print()
+    """运行一轮群聊 — 结构化事件流 + 美化过程展示。"""
+    from multimind.engine.orchestrator import OrchestratorEvent
+
     spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    spinner_idx = 0
 
     try:
-        with Live(
-            Text.from_markup(f"[{C_MUTED}]{spinner_chars[spinner_idx]} 思考中...[/]"),
-            console=console,
-            refresh_per_second=10,
-            transient=True,
-        ) as live:
-            full_output = ""
-            async for chunk in orchestrator.run(user_input, max_rounds=2):
-                full_output += chunk
-                spinner_idx = (spinner_idx + 1) % len(spinner_chars)
-                live.update(
-                    Text.from_markup(
-                        f"[{C_MUTED}]{spinner_chars[spinner_idx]} 响应中...[/]",
-                    )
+        current_role = ""
+        current_tier = ""
+        current_provider = ""
+        role_output = ""
+        role_count = 0
+        round_num = 0
+        spinner_idx = 0
+
+        async for event in orchestrator.run(user_input, max_rounds=2):
+            if event.event_type == OrchestratorEvent.ROLE_START:
+                role_count += 1
+                current_role = event.role_name
+                current_tier = event.role_tier
+                current_provider = event.provider
+                round_num = event.round_num
+                role_output = ""
+
+                # 角色标签行
+                symbol, color, _ = _TIER_LABELS.get(
+                    current_tier, ("●", C_TEXT, current_tier)
+                )
+                console.print(
+                    f"  [{color}]{symbol}[/] "
+                    f"[bold {color}]{current_role}[/]"
+                    f"  [{C_DIM}]via {current_provider}[/]"
+                )
+                # 思考中提示
+                spinner_idx = 0
+                console.print(
+                    f"  [{C_MUTED}]{spinner_chars[spinner_idx]} thinking...[/]",
+                    end="\r",
                 )
 
-        # 流式结束后用 Markdown 渲染
-        if full_output.strip():
-            console.print(f"[{C_ACCENT}]●[/] ", end="")
-            console.print(Markdown(full_output))
-            _chat_history.append(
-                ("assistant", full_output.strip(), datetime.now().strftime("%H:%M:%S"))
+            elif event.event_type == OrchestratorEvent.ROLE_CHUNK:
+                role_output += event.content
+                spinner_idx = (spinner_idx + 1) % len(spinner_chars)
+                # 清除 thinking 行，显示实际输出
+                sys.stdout.write("\r\x1b[K")
+                sys.stdout.write(event.content)
+                sys.stdout.flush()
+
+            elif event.event_type == OrchestratorEvent.ROLE_END:
+                if role_output.strip():
+                    console.print()  # 换行
+                    _chat_history.append(
+                        (current_role, role_output.strip(),
+                         datetime.now().strftime("%H:%M:%S"))
+                    )
+
+            elif event.event_type == OrchestratorEvent.ROUND_END:
+                round_num = event.round_num
+
+            elif event.event_type == OrchestratorEvent.ERROR:
+                sys.stdout.write("\r\x1b[K")
+                console.print(f"  [{C_ERROR}]✗ {event.content}[/]")
+
+        # 轮次总结
+        if role_count > 0:
+            console.print(f"  [{C_DIM}]{'─' * 48}[/]")
+            console.print(
+                f"  [{C_SUCCESS}]✓[/] "
+                f"[{C_MUTED}]{role_count} role(s) responded · "
+                f"{round_num} round(s)[/]"
             )
-        else:
-            console.print(f"[{C_WARNING}]● 无响应内容[/]")
+
     except Exception as e:
-        console.print(f"[{C_ERROR}]✗ 错误: {e}[/]")
+        console.print(f"\n  [{C_ERROR}]✗ Error: {e}[/]")
     console.print()
 
 

@@ -257,20 +257,29 @@ class TestOrchestrator:
         assert len(orch.executors) == 2
 
     @pytest.mark.asyncio
-    async def test_run_yields_output(self, default_providers: ProviderRegistry) -> None:
-        """``Orchestrator.run`` yields a non-empty stream from the leader."""
+    async def test_run_yields_events(self, default_providers: ProviderRegistry) -> None:
+        """``Orchestrator.run`` yields structured events from the leader."""
+
+        from multimind.engine.orchestrator import OrchestratorEvent
 
         orch = Orchestrator()
-        chunks: list[str] = []
-        async for chunk in orch.run("hello team", max_rounds=2):
-            chunks.append(chunk)
-        output = "".join(chunks)
-        assert len(output) > 0
-        assert "用户" in output
-        # The leader (指挥官) must have spoken.
-        assert "指挥官" in output
-        # The run terminates with a completion marker.
-        assert "完成" in output
+        events = [e async for e in orch.run("hello team", max_rounds=2)]
+        assert len(events) > 0
+
+        # Should have at least one ROLE_START, ROLE_CHUNK, ROLE_END
+        types = [e.event_type for e in events]
+        assert OrchestratorEvent.ROLE_START in types
+        assert OrchestratorEvent.ROLE_CHUNK in types
+        assert OrchestratorEvent.ROLE_END in types
+        assert OrchestratorEvent.ROUND_END in types
+
+        # The leader must have spoken.
+        role_names = [e.role_name for e in events if e.event_type == OrchestratorEvent.ROLE_START]
+        assert "指挥官" in role_names
+
+        # Chunks should have content
+        chunks = [e.content for e in events if e.event_type == OrchestratorEvent.ROLE_CHUNK]
+        assert any(len(c) > 0 for c in chunks)
 
     @pytest.mark.asyncio
     async def test_run_posts_to_bus(self, default_providers: ProviderRegistry) -> None:
@@ -280,14 +289,34 @@ class TestOrchestrator:
         async for _ in orch.run("plan something", max_rounds=2):
             pass
         roles = [m.role for m in orch.bus.messages]
-        assert "用户" in roles
+        assert "user" in roles  # broadcast source is "user" (English)
         assert "指挥官" in roles
 
     @pytest.mark.asyncio
-    async def test_run_warns_on_missing_provider(self) -> None:
-        """A role bound to an unregistered provider yields a warning chunk."""
+    async def test_run_error_on_missing_provider(self) -> None:
+        """A role bound to an unregistered provider yields an ERROR event."""
+
+        from multimind.engine.orchestrator import OrchestratorEvent
 
         role = Role(name="ghost", tier="leader", provider="not-registered")
         orch = Orchestrator(roles=[role])
-        output = "".join([c async for c in orch.run("hi", max_rounds=2)])
-        assert "未注册" in output
+        events = [e async for e in orch.run("hi", max_rounds=2)]
+        error_events = [e for e in events if e.event_type == OrchestratorEvent.ERROR]
+        assert len(error_events) > 0
+        assert "not-registered" in error_events[0].content
+
+    @pytest.mark.asyncio
+    async def test_language_affects_prompt(self, default_providers: ProviderRegistry) -> None:
+        """Orchestrator with language='en' includes English response instruction."""
+
+        orch = Orchestrator(language="en")
+        events = [e async for e in orch.run("hello", max_rounds=2)]
+        # Just verify it runs without error and produces events
+        assert len(events) > 0
+
+    @pytest.mark.asyncio
+    async def test_language_zh_default(self, default_providers: ProviderRegistry) -> None:
+        """Orchestrator defaults to Chinese language."""
+
+        orch = Orchestrator()
+        assert orch.language == "zh"

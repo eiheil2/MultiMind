@@ -59,9 +59,8 @@ class CLIReuseAdapter(AIAdapter):
 
         # TODO: 实际实现 — subprocess + stdin/stdout 流式
         # 框架验证：模拟 CLI 流式输出
-        yield f"[CLI复用·{self.config.name}] "
         await asyncio.sleep(0.05)
-        response = f"收到指令：{prompt[:40]}。正在通过官方CLI处理..."
+        response = f"Received task via CLI channel ({self.config.name}). Processing with official CLI tool... Acknowledged."
         for word in response.split():
             yield word + " "
             await asyncio.sleep(0.02)

@@ -51,9 +51,8 @@ class LocalAdapter(AIAdapter):
 
         # TODO: 实际实现 — httpx + Ollama streaming API
         # 框架验证：模拟本地推理流式输出
-        yield f"[本地·{self.config.name}] "
         await asyncio.sleep(0.08)
-        response = f"收到指令：{prompt[:40]}。本地模型推理中..."
+        response = f"Received task via local model ({self.config.name}). Offline inference complete."
         for word in response.split():
             yield word + " "
             await asyncio.sleep(0.025)

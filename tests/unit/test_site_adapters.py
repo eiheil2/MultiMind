@@ -1155,16 +1155,14 @@ class TestBrowserAdapterRefactored:
         """无站点适配器时降级桩模式。"""
         adapter = BrowserAdapter(self._config("unknown_provider"))
         output = await _collect(adapter.ask("test prompt"))
-        assert "网页" in output
-        assert "桩模式" in output
+        assert "stub" in output.lower() or "not configured" in output.lower()
 
     @pytest.mark.asyncio
     async def test_ask_stub_no_playwright(self) -> None:
         """站点适配器已加载但 Playwright 未安装时降级桩模式。"""
         adapter = BrowserAdapter(self._config("deepseek"))
         output = await _collect(adapter.ask("test prompt"))
-        assert "网页" in output
-        assert "桩模式" in output
+        assert "stub" in output.lower() or "not installed" in output.lower()
 
     @pytest.mark.asyncio
     async def test_ask_with_mock_site_adapter(self) -> None:
