@@ -15,6 +15,11 @@
 #   MULTIMIND_VENV    虚拟环境路径（默认: .venv，仅 --venv 时生效）
 #   MULTIMIND_PYTHON  指定 Python 解释器路径
 #
+# Termux 支持:
+#   脚本自动检测 Termux 环境，跳过 Playwright 安装（不支持 Chromium），
+#   并添加 --break-system-packages 参数适配 Termux 的 pip。
+#   API 通道和 CLI 通道在 Termux 下可正常使用。
+#
 # 参考: Oh My Zsh / rustup 安装脚本最佳实践
 #
 set -euo pipefail
@@ -173,6 +178,24 @@ echo -e "${BOLD}║   多 AI 协作 CLI Agent                    ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
+# ── 环境检测 ──────────────────────────────────────────────────────────
+
+# 检测是否运行在 Termux 环境中
+IS_TERMUX=false
+if [ -n "$PREFIX" ] && echo "$PREFIX" | grep -q "com.termux"; then
+    IS_TERMUX=true
+fi
+
+if [ "$IS_TERMUX" = true ]; then
+    info "检测到 Termux 环境"
+    # Termux 无法安装 Playwright Chromium
+    if [ "$INSTALL_BROWSER" = true ]; then
+        warn "Termux 环境无法安装 Playwright Chromium，自动跳过"
+        warn "浏览器通道功能不可用，API/CLI 通道正常"
+        INSTALL_BROWSER=false
+    fi
+fi
+
 # ── Step 1: 检测 Python ────────────────────────────────────────────────
 
 info "Step 1/6: 检测 Python..."
@@ -206,6 +229,9 @@ success "  Python 版本满足要求"
 
 info "Step 2/6: 检测 pip..."
 if ! $PYTHON -m pip --version >/dev/null 2>&1; then
+    if [ "$IS_TERMUX" = true ]; then
+        error "未找到 pip，请运行: pkg install python-pip"
+    fi
     error "未找到 pip，请安装 pip 后重试（https://pip.pypa.io/en/stable/installation/）"
 fi
 success "  pip 可用"
@@ -242,17 +268,32 @@ fi
 
 info "Step 4/6: 安装依赖..."
 
-info "  升级 pip..."
-$PYTHON -m pip install --upgrade pip --quiet
+# 确定安装方式（避免破坏系统包管理器的 pip）
+PIP_INSTALL_ARGS="-e"
+if [ "$IS_TERMUX" = true ]; then
+    # Termux 需要此参数
+    PIP_INSTALL_ARGS="$PIP_INSTALL_ARGS --break-system-packages"
+fi
+
+if [ "$USE_VENV" = true ]; then
+    # 虚拟环境中可以安全升级 pip
+    info "  升级 pip（虚拟环境）..."
+    $PYTHON -m pip install --upgrade pip --quiet 2>/dev/null || warn "  pip 升级跳过（不影响安装）"
+fi
 
 if [ "$INSTALL_DEV" = true ]; then
     info "  安装核心依赖 + 开发依赖..."
-    $PYTHON -m pip install -e ".[browser,dev]" --quiet
+    $PYTHON -m pip install $PIP_INSTALL_ARGS ".[browser,dev]" --quiet
     success "  已安装: core + browser + dev"
 else
-    info "  安装核心依赖 + 浏览器依赖..."
-    $PYTHON -m pip install -e ".[browser]" --quiet
-    success "  已安装: core + browser"
+    info "  安装核心依赖..."
+    $PYTHON -m pip install $PIP_INSTALL_ARGS "." --quiet
+    success "  已安装: core (API/CLI 通道可用)"
+    if [ "$INSTALL_BROWSER" = true ]; then
+        info "  安装浏览器依赖..."
+        $PYTHON -m pip install $PIP_INSTALL_ARGS ".[browser]" --quiet 2>/dev/null || \
+            warn "  浏览器依赖安装失败，可稍后运行: pip install playwright"
+    fi
 fi
 
 # ── Step 5: Playwright 浏览器 ─────────────────────────────────────────
@@ -326,6 +367,18 @@ echo -e "  ${CYAN}multimind init --non-interactive${NC}  # 非交互式初始化
 echo -e "  ${CYAN}multimind providers${NC}         # 查看已注册 Provider"
 echo -e "  ${CYAN}multimind chat${NC}              # 开始对话"
 echo ""
+
+if [ "$INSTALL_BROWSER" = false ]; then
+    echo -e "${YELLOW}注意: 浏览器通道未安装（无 Playwright Chromium）${NC}"
+    echo -e "  API 通道和 CLI 通道可正常使用"
+    if [ "$IS_TERMUX" = true ]; then
+        echo -e "  ${DIM}Termux 环境不支持 Playwright，浏览器通道不可用${NC}"
+    else
+        echo -e "  ${DIM}如需浏览器通道: python -m playwright install chromium${NC}"
+    fi
+    echo ""
+fi
+
 echo -e "其他:"
 echo -e "  ${DIM}./install.sh --uninstall${NC}     # 卸载"
 echo -e "  ${DIM}./install.sh --help${NC}          # 查看所有选项"
