@@ -25,7 +25,13 @@ from rich.text import Text
 
 from multimind.adapters.registry import init_default_providers
 from multimind.config.settings import get_config_value, load_config, update_config
-from multimind.core.constants import APP_VERSION, DEFAULT_CONFIG_PATH
+from multimind.core.constants import (
+    APP_VERSION,
+    CHAT_HISTORY_FILE,
+    DEFAULT_CONFIG_PATH,
+    HISTORY_DIR,
+    INPUT_HISTORY_FILE,
+)
 from multimind.engine import Orchestrator
 
 __all__ = ["chat_command"]
@@ -47,6 +53,7 @@ C_USER = "#7dcfff"        # 用户消息（青）
 SLASH_COMMANDS: list[tuple[str, str, str]] = [
     # 会话
     ("/history", "查看本轮对话历史", "session"),
+    ("/import", "导入上次会话的对话历史", "session"),
     ("/save", "保存对话到文件", "session"),
     ("/retry", "重新发送上一条消息", "session"),
     ("/clear", "清屏并清空对话历史", "session"),
@@ -72,6 +79,85 @@ SLASH_COMMANDS: list[tuple[str, str, str]] = [
 # 对话历史: [(role, content, timestamp), ...]
 _chat_history: list[tuple[str, str, str]] = []
 _last_input: str = ""
+# 输入历史（bash 风格 Up/Down 导航）
+_input_history: list[str] = []
+_history_idx: int = -1  # -1 表示当前未在浏览历史
+
+
+def _load_input_history() -> None:
+    """从文件加载输入历史。"""
+    global _input_history
+    _input_history = []
+    if INPUT_HISTORY_FILE.exists():
+        try:
+            _input_history = INPUT_HISTORY_FILE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            # 去重：保留最后出现的（同一条命令只记最后一次）
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for line in reversed(_input_history):
+                stripped = line.strip()
+                if stripped and stripped not in seen:
+                    seen.add(stripped)
+                    deduped.append(stripped)
+            _input_history = list(reversed(deduped))[-200:]  # 最多 200 条
+        except OSError:
+            pass
+
+
+def _save_input_history(entry: str) -> None:
+    """保存一条输入到历史文件。"""
+    global _input_history
+    entry = entry.strip()
+    if not entry:
+        return
+    _input_history.append(entry)
+    # 限制内存中 200 条
+    if len(_input_history) > 200:
+        _input_history = _input_history[-200:]
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        with open(INPUT_HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    except OSError:
+        pass
+
+
+def _save_chat_history() -> None:
+    """保存当前会话对话历史到 JSON 文件。"""
+    if not _chat_history:
+        return
+    import json
+
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "messages": [
+                {"role": r, "content": c, "time": t}
+                for r, c, t in _chat_history
+            ],
+        }
+        CHAT_HISTORY_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def _load_last_chat() -> dict | None:
+    """加载上次会话的对话历史。"""
+    import json
+
+    if not CHAT_HISTORY_FILE.exists():
+        return None
+    try:
+        data = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+        return data
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def chat_command(
@@ -117,7 +203,10 @@ def _run_headless(orchestrator: Orchestrator, message: str) -> None:
 def _interactive(orchestrator: Orchestrator) -> None:
     """现代交互式群聊 — OpenCode/Codex 风格。"""
     global _last_input
+    # 加载输入历史
+    _load_input_history()
     _print_header()
+    _show_last_session_reminder()
     _print_footer_hint()
 
     while True:
@@ -125,10 +214,14 @@ def _interactive(orchestrator: Orchestrator) -> None:
             user_input = _read_input()
         except (EOFError, KeyboardInterrupt):
             console.print(f"\n[{C_MUTED}]再见[/]")
+            _save_chat_history()
             break
 
         if not user_input:
             continue
+
+        # 保存到输入历史
+        _save_input_history(user_input)
 
         # 斜杠命令
         if user_input.startswith("/"):
@@ -164,7 +257,39 @@ def _print_header() -> None:
 def _print_footer_hint() -> None:
     """底部快捷键提示。"""
     console.print(
-        f"[{C_DIM}]  / 命令  ·  Tab 补全  ·  Ctrl+C 退出[/]\n"
+        f"[{C_DIM}]  / 命令  ·  Tab 补全  ·  ↑↓ 历史  ·  Ctrl+C 退出[/]\n"
+    )
+
+
+def _show_last_session_reminder() -> None:
+    """启动时显示上次会话提醒。"""
+    last = _load_last_chat()
+    if not last:
+        return
+
+    saved_at = last.get("saved_at", "未知时间")
+    messages = last.get("messages", [])
+    if not messages:
+        return
+
+    # 找到最后一条用户消息
+    last_user_msg = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            last_user_msg = msg.get("content", "")
+            break
+
+    console.print(
+        f"[{C_DIM}]上次对话: {saved_at} "
+        f"({len(messages)} 条消息)[/]"
+    )
+    if last_user_msg:
+        preview = last_user_msg[:60].replace("\n", " ")
+        if len(last_user_msg) > 60:
+            preview += "..."
+        console.print(f"[{C_DIM}]  最后: {preview}[/]")
+    console.print(
+        f"[{C_DIM}]  /history 查看本次  ·  /import 导入上次对话[/]\n"
     )
 
 
@@ -185,6 +310,8 @@ def _read_input() -> str:
 
     buf = ""
     shown = 0  # 当前显示的建议行数
+    nav_idx = -1  # 输入历史导航索引，-1 表示当前未在浏览历史
+    saved_buf = ""  # 浏览历史前保存的当前输入
 
     def clear_suggestions() -> None:
         nonlocal shown
@@ -199,6 +326,41 @@ def _read_input() -> str:
         sys.stdout.write("\r\x1b[K")
         sys.stdout.write(f"\x1b[1;38;2;122;162;247m❯\x1b[0m {buf}")
         sys.stdout.flush()
+
+    def navigate_history(direction: str) -> None:
+        """浏览输入历史（Up=向前/更早, Down=向后/更新）。"""
+        nonlocal buf, nav_idx, saved_buf
+        if not _input_history:
+            return
+
+        if direction == "up":
+            if nav_idx == -1:
+                # 首次按 Up，保存当前输入
+                saved_buf = buf
+                nav_idx = len(_input_history) - 1
+            elif nav_idx > 0:
+                nav_idx -= 1
+            else:
+                return  # 已到最早
+        else:  # down
+            if nav_idx == -1:
+                return  # 不在浏览历史
+            elif nav_idx < len(_input_history) - 1:
+                nav_idx += 1
+            else:
+                # 回到当前输入
+                nav_idx = -1
+                buf = saved_buf
+                clear_suggestions()
+                draw_prompt()
+                return
+
+        buf = _input_history[nav_idx]
+        clear_suggestions()
+        if buf.startswith("/"):
+            show_suggestions()
+        else:
+            draw_prompt()
 
     def show_suggestions() -> None:
         nonlocal shown
@@ -243,6 +405,28 @@ def _read_input() -> str:
             sys.stdout.write("\n")
             sys.stdout.flush()
             return buf
+
+        # 转义序列处理（方向键等）
+        if char == "\x1b":
+            seq2 = _read_char()
+            if seq2 == "[":
+                seq3 = _read_char()
+                if seq3 == "A":  # ↑ 上箭头 — 历史导航
+                    navigate_history("up")
+                    continue
+                if seq3 == "B":  # ↓ 下箭头 — 历史导航
+                    navigate_history("down")
+                    continue
+                # 其他方向键（C=右, D=左）暂不处理
+                continue
+            # 单独 ESC — 清除当前输入
+            if seq2 is None:
+                buf = ""
+                clear_suggestions()
+                draw_prompt()
+                continue
+            continue
+
         if char in ("\r", "\n"):
             clear_suggestions()
             sys.stdout.write("\n")
@@ -255,6 +439,7 @@ def _read_input() -> str:
         if char == "\x7f":  # Backspace
             if buf:
                 buf = buf[:-1]
+                nav_idx = -1  # 编辑时退出历史浏览
                 if buf.startswith("/"):
                     show_suggestions()
                 else:
@@ -265,6 +450,7 @@ def _read_input() -> str:
             completed = _tab_complete(buf)
             if completed != buf:
                 buf = completed
+                nav_idx = -1
                 if buf.startswith("/"):
                     show_suggestions()
                 else:
@@ -272,6 +458,8 @@ def _read_input() -> str:
                     draw_prompt()
             continue
 
+        # 任何新字符输入都退出历史浏览
+        nav_idx = -1
         buf += char
         if buf.startswith("/"):
             show_suggestions()
@@ -391,6 +579,8 @@ def _handle_slash(cmd: str, orchestrator: Orchestrator) -> bool:
         _print_header()
     elif command == "/history":
         _show_history()
+    elif command == "/import":
+        _import_last_session()
     elif command == "/save":
         _save_conversation(args)
     elif command == "/retry":
@@ -521,6 +711,39 @@ def _show_history() -> None:
         console.print(f"  [{C_DIM}]{ts}[/] {label} {preview}")
 
     console.print()
+
+
+def _import_last_session() -> None:
+    """导入上次会话的对话历史到当前会话。"""
+    global _chat_history
+    last = _load_last_chat()
+    if not last:
+        console.print(f"\n  [{C_WARNING}]● 没有上次会话记录可导入[/]\n")
+        return
+
+    messages = last.get("messages", [])
+    if not messages:
+        console.print(f"\n  [{C_WARNING}]● 上次会话没有消息[/]\n")
+        return
+
+    saved_at = last.get("saved_at", "未知时间")
+
+    # 如果当前已有历史，先提示
+    if _chat_history:
+        console.print(f"\n  [{C_WARNING}]当前已有 {len(_chat_history)} 条消息[/]")
+        console.print(f"  [{C_MUTED}]导入将追加到当前历史之后[/]")
+
+    imported = 0
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        ts = msg.get("time", "")
+        if content:
+            _chat_history.append((role, content, ts))
+            imported += 1
+
+    console.print(f"  [{C_SUCCESS}]● 已导入 {imported} 条消息（来自 {saved_at}）[/]")
+    console.print(f"  [{C_DIM}]  当前共 {len(_chat_history)} 条消息，/history 查看[/]\n")
 
 
 def _save_conversation(args: str) -> None:

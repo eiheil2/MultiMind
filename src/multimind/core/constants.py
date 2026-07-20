@@ -12,6 +12,9 @@ __all__ = [
     "DEFAULT_SESSION_ID",
     "DEFAULT_DB_PATH",
     "USER_CONFIG_DIR",
+    "HISTORY_DIR",
+    "INPUT_HISTORY_FILE",
+    "CHAT_HISTORY_FILE",
 ]
 
 APP_NAME: str = "multimind"
@@ -21,3 +24,8 @@ USER_CONFIG_DIR: Path = Path(os.environ.get("MULTIMIND_HOME", Path.home() / ".mu
 DEFAULT_CONFIG_PATH: Path = USER_CONFIG_DIR / "config.toml"
 DEFAULT_DB_PATH: Path = USER_CONFIG_DIR / "multimind.db"
 DEFAULT_SESSION_ID: str = "default"
+
+# 历史记录目录
+HISTORY_DIR: Path = USER_CONFIG_DIR / "history"
+INPUT_HISTORY_FILE: Path = HISTORY_DIR / "input_history.txt"
+CHAT_HISTORY_FILE: Path = HISTORY_DIR / "last_chat.json"
