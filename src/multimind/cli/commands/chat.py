@@ -63,6 +63,8 @@ SLASH_COMMANDS: list[tuple[str, str, str]] = [
     # 模式
     ("/flatten", "切换为扁平模式（所有角色同层）", "mode"),
     ("/rebuild", "重建分层拓扑（Leader→Dispatcher→Executor）", "mode"),
+    # 提示词
+    ("/prompt", "查看/编辑/重置角色提示词", "prompt"),
     # 信息
     ("/status", "查看 Provider 额度和拓扑状态", "info"),
     ("/providers", "列出所有可用 Provider", "info"),
@@ -622,6 +624,10 @@ def _handle_slash(cmd: str, orchestrator: Orchestrator) -> bool:
         msg = asyncio.run(orchestrator.topology.rebuild())
         console.print(f"  [{C_WARNING}]→[/] [{C_MUTED}]{msg}[/]")
 
+    # 提示词
+    elif command == "/prompt":
+        _handle_prompt(args, orchestrator)
+
     # 会话
     elif command == "/clear":
         os.system("clear" if os.name != "nt" else "cls")
@@ -970,6 +976,194 @@ def _handle_model(args: str, orchestrator: Orchestrator) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 提示词命令
+# ═══════════════════════════════════════════════════════════════════════
+
+# 角色 tier 的中文标签
+_TIER_ZH: dict[str, str] = {
+    "leader": "指挥官 (Leader)",
+    "dispatcher": "调度员 (Dispatcher)",
+    "executor": "执行者 (Executor)",
+}
+
+
+def _handle_prompt(args: str, orchestrator: Orchestrator) -> None:
+    """处理 /prompt 命令 — 查看/编辑/重置角色提示词。
+
+    用法:
+      /prompt              — 查看所有角色提示词概览
+      /prompt <tier>       — 查看指定角色的完整提示词
+      /prompt edit <tier>  — 用 $EDITOR 编辑（预填充当前提示词）
+      /prompt reset <tier> — 重置为内置默认
+    """
+    parts = args.split() if args else []
+
+    # /prompt — 概览
+    if not parts:
+        _show_prompt_overview()
+        return
+
+    # /prompt edit <tier>
+    if parts[0] == "edit" and len(parts) >= 2:
+        tier = parts[1].lower()
+        if tier not in _TIER_ZH:
+            console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
+            console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
+            return
+        _edit_prompt(tier)
+        return
+
+    # /prompt reset <tier>
+    if parts[0] == "reset" and len(parts) >= 2:
+        from multimind.engine.roles import reset_custom_prompt
+
+        tier = parts[1].lower()
+        if tier not in _TIER_ZH:
+            console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
+            console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
+            return
+        deleted = reset_custom_prompt(tier)
+        if deleted:
+            console.print(f"  [{C_SUCCESS}]● 已重置 {_TIER_ZH[tier]} 的提示词为内置默认[/]")
+        else:
+            console.print(f"  [{C_MUTED}]● {_TIER_ZH[tier]} 本就在使用内置默认[/]")
+        console.print(f"  [{C_DIM}]  重启后生效[/]\n")
+        return
+
+    # /prompt <tier> — 查看指定角色
+    tier = parts[0].lower()
+    if tier not in _TIER_ZH:
+        console.print(f"\n  [{C_ERROR}]✗ 未知角色: {tier}[/]")
+        console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]")
+        console.print(f"  [{C_DIM}]用法: /prompt [edit|reset] <tier>[/]\n")
+        return
+
+    _show_single_prompt(tier)
+
+
+def _show_prompt_overview() -> None:
+    """显示所有角色提示词概览。"""
+    from multimind.engine.roles import get_effective_prompt, is_custom
+
+    console.print(f"\n  [{C_ACCENT}]角色提示词[/]")
+    console.print(f"  [{C_DIM}]{'─' * 48}[/]")
+
+    for tier, label in _TIER_ZH.items():
+        prompt = get_effective_prompt(tier)  # type: ignore[arg-type]
+        custom = is_custom(tier)  # type: ignore[arg-type]
+        status = f"[{C_WARNING}]自定义[/]" if custom else f"[{C_DIM}]默认[/]"
+        preview = prompt[:60].replace("\n", " ")
+        if len(prompt) > 60:
+            preview += "..."
+        console.print(
+            f"  [{C_TEXT}]{tier:<12}[/] {status}"
+            f"\n  [{C_DIM}]  {label}[/]"
+            f"\n  [{C_MUTED}]  {preview}[/]"
+        )
+
+    console.print(f"\n  [{C_DIM}]用法: /prompt <tier> 查看详情[/]")
+    console.print(f"  [{C_DIM}]      /prompt edit <tier> 编辑[/]")
+    console.print(f"  [{C_DIM}]      /prompt reset <tier> 重置[/]\n")
+
+
+def _show_single_prompt(tier: str) -> None:
+    """显示单个角色的完整提示词。"""
+    from multimind.engine.roles import get_effective_prompt, is_custom
+
+    label = _TIER_ZH[tier]
+    prompt = get_effective_prompt(tier)  # type: ignore[arg-type]
+    custom = is_custom(tier)  # type: ignore[arg-type]
+    status = f"[{C_WARNING}]自定义[/]" if custom else f"[{C_DIM}]默认[/]"
+
+    console.print(f"\n  [{C_ACCENT}]{label}[/] {status}")
+    console.print(f"  [{C_DIM}]{'─' * 48}[/]")
+    console.print(f"  [{C_TEXT}]{prompt}[/]")
+    console.print(f"\n  [{C_DIM}]编辑: /prompt edit {tier}  ·  重置: /prompt reset {tier}[/]\n")
+
+
+def _edit_prompt(tier: str) -> None:
+    """用 $EDITOR 编辑角色提示词，预填充当前内容。"""
+    import contextlib
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from multimind.engine.roles import (
+        get_effective_prompt,
+        reset_custom_prompt,
+        save_custom_prompt,
+    )
+
+    current = get_effective_prompt(tier)  # type: ignore[arg-type]
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+
+    if not editor:
+        # 无 EDITOR，尝试常见编辑器
+        for candidate in ("vim", "nano", "vi", "micro"):
+            if shutil.which(candidate):
+                editor = candidate
+                break
+
+    if not editor:
+        console.print(f"  [{C_ERROR}]✗ 未找到编辑器[/]")
+        console.print(f"  [{C_MUTED}]设置环境变量: export EDITOR=vim[/]")
+        console.print(f"  [{C_DIM}]或直接编辑文件: ~/.multimind/prompts/{tier}.md[/]\n")
+        return
+
+    # 写入临时文件，预填充当前提示词
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(f"# 编辑 {tier} 提示词 — 保存退出即可应用\n")
+        f.write("# 删除全部内容（只留注释）将恢复默认\n\n")
+        f.write(current + "\n")
+        tmp_path = f.name
+
+    console.print(f"  [{C_MUTED}]正在打开 {editor} 编辑 {tier} 提示词...[/]")
+
+    try:
+        result = subprocess.run([editor, tmp_path], check=False)
+        if result.returncode != 0:
+            console.print(f"  [{C_WARNING}]● 编辑器退出码非零，未保存[/]\n")
+            return
+    except FileNotFoundError:
+        console.print(f"  [{C_ERROR}]✗ 编辑器未找到: {editor}[/]\n")
+        return
+
+    # 读取编辑后的内容
+    content = Path(tmp_path).read_text(encoding="utf-8")
+
+    # 清理临时文件
+    with contextlib.suppress(OSError):
+        Path(tmp_path).unlink()
+
+    # 过滤注释行和空行
+    lines = [
+        line for line in content.splitlines()
+        if not line.strip().startswith("#") and line.strip()
+    ]
+    cleaned = "\n".join(lines).strip()
+
+    if not cleaned:
+        # 内容为空 → 重置为默认
+        reset_custom_prompt(tier)  # type: ignore[arg-type]
+        console.print(f"  [{C_SUCCESS}]● 内容为空，已重置为默认[/]\n")
+        return
+
+    # 检查是否有变化
+    if cleaned == current:
+        console.print(f"  [{C_MUTED}]● 提示词未变化[/]\n")
+        return
+
+    # 保存
+    save_custom_prompt(tier, cleaned)  # type: ignore[arg-type]
+    console.print(f"  [{C_SUCCESS}]● 已保存自定义提示词[/]")
+    console.print(f"  [{C_DIM}]  文件: ~/.multimind/prompts/{tier}.md[/]")
+    console.print(f"  [{C_DIM}]  重启后生效，或 /prompt reset {tier} 恢复默认[/]\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 帮助
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -983,6 +1177,7 @@ def _show_help() -> None:
         "session": "会话",
         "config": "配置",
         "mode": "模式",
+        "prompt": "提示词",
         "info": "信息",
         "util": "工具",
     }

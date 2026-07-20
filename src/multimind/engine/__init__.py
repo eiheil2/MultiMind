@@ -2,7 +2,16 @@
 
 from multimind.engine.groupchat import ChatEvent, GroupChatBus, TopologyMode
 from multimind.engine.orchestrator import Orchestrator, OrchestratorEvent
-from multimind.engine.roles import ROLE_PROMPTS, Role, default_roles
+from multimind.engine.roles import (
+    ROLE_PROMPTS,
+    Role,
+    default_roles,
+    get_effective_prompt,
+    is_custom,
+    load_custom_prompt,
+    reset_custom_prompt,
+    save_custom_prompt,
+)
 from multimind.engine.topology import TopologyManager
 
 __all__ = [
@@ -15,4 +24,9 @@ __all__ = [
     "TopologyManager",
     "Orchestrator",
     "OrchestratorEvent",
+    "load_custom_prompt",
+    "save_custom_prompt",
+    "reset_custom_prompt",
+    "get_effective_prompt",
+    "is_custom",
 ]

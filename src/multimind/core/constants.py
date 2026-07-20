@@ -15,6 +15,7 @@ __all__ = [
     "HISTORY_DIR",
     "INPUT_HISTORY_FILE",
     "CHAT_HISTORY_FILE",
+    "PROMPTS_DIR",
 ]
 
 APP_NAME: str = "multimind"
@@ -29,3 +30,6 @@ DEFAULT_SESSION_ID: str = "default"
 HISTORY_DIR: Path = USER_CONFIG_DIR / "history"
 INPUT_HISTORY_FILE: Path = HISTORY_DIR / "input_history.txt"
 CHAT_HISTORY_FILE: Path = HISTORY_DIR / "last_chat.json"
+
+# 自定义提示词目录
+PROMPTS_DIR: Path = USER_CONFIG_DIR / "prompts"
