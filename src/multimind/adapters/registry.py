@@ -119,6 +119,7 @@ def init_default_providers() -> None:
             tags=("free", "long-context", "fast"),
             priority=10,
             daily_quota=1000,
+            rpm_limit=60,
             max_tokens=1_000_000,
         ),
         ProviderConfig(
@@ -128,7 +129,8 @@ def init_default_providers() -> None:
             api_key=os.environ.get("GROQ_API_KEY", ""),
             tags=("free", "fast"),
             priority=20,
-            daily_quota=14_400,
+            daily_quota=1_000_000,
+            rpm_limit=30,
             max_tokens=32_000,
         ),
         ProviderConfig(
@@ -138,6 +140,7 @@ def init_default_providers() -> None:
             tags=("free", "zero-config"),
             priority=30,
             daily_quota=-1,
+            rpm_limit=60,
             max_tokens=128_000,
         ),
         ProviderConfig(
@@ -147,6 +150,7 @@ def init_default_providers() -> None:
             tags=("free", "offline", "private"),
             priority=90,
             daily_quota=-1,
+            rpm_limit=-1,
             max_tokens=32_000,
         ),
     ]

@@ -49,16 +49,32 @@ class AppConfig:
     """应用总配置。
 
     Attributes:
+        language: 界面语言（"zh" / "en"）。
+        topology: 默认拓扑模式（"layered" / "flat" / "hybrid"）。
+        default_provider: 默认使用的 provider 名称。
+        tool_permission: 工具执行权限（"none" / "ask" / "auto" / "all"）。
+        auto_commit: 是否自动 git commit。
+        output_dir: 输出目录。
+        log_level: 日志级别。
         providers: Provider 配置列表。
         git: Git 配置。
         memory: 记忆系统配置。
         roles: 角色编排配置。
+        api_keys: API 密钥映射（provider 名 → key）。
     """
 
+    language: str = "zh"
+    topology: str = "layered"
+    default_provider: str = ""
+    tool_permission: str = "ask"
+    auto_commit: bool = True
+    output_dir: str = ""
+    log_level: str = "INFO"
     providers: list[dict[str, Any]] = field(default_factory=list)
     git: GitConfigSpec = field(default_factory=GitConfigSpec)
     memory: MemoryConfigSpec = field(default_factory=MemoryConfigSpec)
     roles: list[dict[str, Any]] = field(default_factory=list)
+    api_keys: dict[str, str] = field(default_factory=dict)
 
 
 def load_config(config_path: Path | None = None) -> AppConfig:
@@ -86,9 +102,19 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     git_spec = GitConfigSpec(**data.get("git", {}))
     memory_spec = MemoryConfigSpec(**data.get("memory", {}))
 
+    general = data.get("general", {})
+
     return AppConfig(
+        language=general.get("language", "zh"),
+        topology=general.get("topology", "layered"),
+        default_provider=general.get("default_provider", ""),
+        tool_permission=general.get("tool_permission", "ask"),
+        auto_commit=general.get("auto_commit", True),
+        output_dir=general.get("output_dir", ""),
+        log_level=data.get("logging", {}).get("level", "INFO"),
         providers=data.get("providers", []),
         git=git_spec,
         memory=memory_spec,
         roles=data.get("roles", []),
+        api_keys=data.get("api_keys", {}),
     )

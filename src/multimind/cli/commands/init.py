@@ -1,8 +1,8 @@
 """``multimind init`` 命令 — 交互式初始化配置向导。
 
 支持两种模式：
-  - **快速开始** — 仅问 2 个问题（启用站点 + 输出目录），其余用默认值
-  - **专家模式** — 逐项配置浏览器、安全参数、日志级别、自定义配置目录等
+  - **快速开始** — 3 个问题（语言 + 启用站点 + 默认 Provider），其余用默认值
+  - **专家模式** — 逐项配置语言、拓扑模式、API 密钥、工具权限、安全参数等
 
 生成的配置文件位于 ``~/.multimind/config.toml``。
 """
@@ -30,8 +30,26 @@ _DEFAULT_CONFIG_FILE = _DEFAULT_CONFIG_DIR / "config.toml"
 _DEFAULT_OUTPUT_DIR = _DEFAULT_CONFIG_DIR / "output"
 _DEFAULT_SITES_DIR = _DEFAULT_CONFIG_DIR / "sites"
 
-# 内置站点列表
-_BUILTIN_SITES = ["deepseek", "chatgpt", "qwen", "doubao", "kimi"]
+# 可用语言
+_LANGUAGES = {
+    "1": ("zh", "中文"),
+    "2": ("en", "English"),
+}
+
+# 可用拓扑模式
+_TOPOLOGIES = {
+    "1": ("layered", "分层模式 — Leader → Dispatcher → Executor（推荐）"),
+    "2": ("flat", "扁平模式 — 所有角色同层平等"),
+    "3": ("hybrid", "混合模式 — 部分分层部分扁平"),
+}
+
+# 工具权限级别
+_TOOL_PERMISSIONS = {
+    "1": ("none", "禁用工具调用"),
+    "2": ("ask", "每次确认（推荐）"),
+    "3": ("auto", "低风险自动，高风险确认"),
+    "4": ("all", "全部自动执行"),
+}
 
 
 def _print_banner() -> None:
@@ -43,6 +61,33 @@ def _print_banner() -> None:
             border_style="cyan",
         )
     )
+
+
+def _select_language() -> str:
+    """选择界面语言。"""
+    console.print("\n[bold]界面语言 / Interface Language[/]")
+    for key, (_code, label) in _LANGUAGES.items():
+        console.print(f"  {key}) {label}")
+    choice = typer.prompt("选择", default="1", show_default=False)
+    return _LANGUAGES.get(choice, ("zh", "中文"))[0]
+
+
+def _select_topology() -> str:
+    """选择拓扑模式。"""
+    console.print("\n[bold]调用模式（拓扑）[/]")
+    for key, (_code, label) in _TOPOLOGIES.items():
+        console.print(f"  {key}) {label}")
+    choice = typer.prompt("选择", default="1", show_default=False)
+    return _TOPOLOGIES.get(choice, ("layered", ""))[0]
+
+
+def _select_tool_permission() -> str:
+    """选择工具权限。"""
+    console.print("\n[bold]工具执行权限[/]")
+    for key, (_code, label) in _TOOL_PERMISSIONS.items():
+        console.print(f"  {key}) {label}")
+    choice = typer.prompt("选择", default="2", show_default=False)
+    return _TOOL_PERMISSIONS.get(choice, ("ask", ""))[0]
 
 
 def _show_available_sites() -> list[str]:
@@ -71,7 +116,6 @@ def _select_sites(available: list[str]) -> list[str]:
     raw = typer.prompt("启用站点", default=default_str, show_default=False)
     selected = [s.strip() for s in raw.split(",") if s.strip()]
 
-    # 验证
     invalid = [s for s in selected if s not in available]
     if invalid:
         console.print(f"[yellow]警告: 未知站点 {invalid}，已忽略[/]")
@@ -84,12 +128,49 @@ def _select_sites(available: list[str]) -> list[str]:
     return selected
 
 
+def _select_default_provider(has_groq: bool) -> str:
+    """选择默认 Provider。"""
+    console.print("\n[bold]默认 Provider[/]")
+    console.print("  1) gemini-cli — 免费CLI通道（推荐，无需密钥）")
+    console.print("  2) opencode-free — 免费公共端点（无需密钥）")
+    if has_groq:
+        console.print("  3) groq — API通道（已配置密钥）")
+    console.print("  4) ollama-local — 本地模型（需提前安装Ollama）")
+
+    default = "1"
+    choice = typer.prompt("选择", default=default, show_default=False)
+    providers = {
+        "1": "gemini-cli",
+        "2": "opencode-free",
+        "3": "groq" if has_groq else "gemini-cli",
+        "4": "ollama-local",
+    }
+    return providers.get(choice, "gemini-cli")
+
+
+def _input_api_keys() -> dict[str, str]:
+    """输入 API 密钥（可选）。"""
+    console.print("\n[bold]API 密钥配置（可选，回车跳过）[/]")
+    console.print("  [dim]未配置密钥的 API Provider 会被跳过，不影响 CLI/公共端点通道[/]")
+
+    keys: dict[str, str] = {}
+    groq_key = typer.prompt("  Groq API Key (https://console.groq.com)", default="", show_default=False)
+    if groq_key:
+        keys["groq"] = groq_key
+
+    return keys
+
+
 def _simple_mode() -> dict[str, Any]:
-    """快速开始模式 — 最少问题。"""
+    """快速开始模式 — 3 个核心问题。"""
     console.print("\n[bold green]=== 快速开始模式 ===[/]\n")
+
+    language = _select_language()
 
     available = _show_available_sites()
     selected_sites = _select_sites(available)
+
+    default_provider = _select_default_provider(has_groq=False)
 
     output_dir = typer.prompt(
         "输出目录",
@@ -99,12 +180,15 @@ def _simple_mode() -> dict[str, Any]:
 
     return {
         "general": {
+            "language": language,
             "mode": "simple",
+            "topology": "layered",
+            "default_provider": default_provider,
+            "tool_permission": "ask",
+            "auto_commit": True,
             "output_dir": str(Path(output_dir).expanduser()),
         },
-        "browser": {
-            "headed": True,
-        },
+        "browser": {"headed": True},
         "safety": {
             "min_delay": 1.0,
             "max_delay": 3.0,
@@ -112,12 +196,8 @@ def _simple_mode() -> dict[str, Any]:
             "session_timeout": 3600,
             "max_consecutive_errors": 5,
         },
-        "sites": {
-            "enabled": selected_sites,
-        },
-        "logging": {
-            "level": "INFO",
-        },
+        "sites": {"enabled": selected_sites},
+        "logging": {"level": "INFO"},
     }
 
 
@@ -125,8 +205,24 @@ def _expert_mode() -> dict[str, Any]:
     """专家模式 — 逐项配置。"""
     console.print("\n[bold magenta]=== 专家模式 ===[/]\n")
 
+    # 语言
+    language = _select_language()
+
+    # 拓扑模式
+    topology = _select_topology()
+
+    # 工具权限
+    tool_permission = _select_tool_permission()
+
+    # 站点
     available = _show_available_sites()
     selected_sites = _select_sites(available)
+
+    # API 密钥
+    api_keys = _input_api_keys()
+
+    # 默认 Provider
+    default_provider = _select_default_provider(has_groq="groq" in api_keys)
 
     # 输出目录
     output_dir = typer.prompt(
@@ -134,6 +230,9 @@ def _expert_mode() -> dict[str, Any]:
         default=str(_DEFAULT_OUTPUT_DIR),
         show_default=True,
     )
+
+    # Auto-commit
+    auto_commit = typer.confirm("自动 Git commit（每次任务后自动提交）", default=True)
 
     # 浏览器模式
     console.print("\n浏览器模式:")
@@ -151,9 +250,7 @@ def _expert_mode() -> dict[str, Any]:
         typer.prompt("操作间最大延迟（秒）", default="3.0", show_default=True)
     )
     max_requests = int(
-        typer.prompt(
-            "每会话最大请求数", default="50", show_default=True
-        )
+        typer.prompt("每会话最大请求数", default="50", show_default=True)
     )
     session_timeout = int(
         typer.prompt("会话超时（秒）", default="3600", show_default=True)
@@ -189,12 +286,15 @@ def _expert_mode() -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "general": {
+            "language": language,
             "mode": "expert",
+            "topology": topology,
+            "default_provider": default_provider,
+            "tool_permission": tool_permission,
+            "auto_commit": auto_commit,
             "output_dir": str(Path(output_dir).expanduser()),
         },
-        "browser": {
-            "headed": headed,
-        },
+        "browser": {"headed": headed},
         "safety": {
             "min_delay": min_delay,
             "max_delay": max_delay,
@@ -205,15 +305,42 @@ def _expert_mode() -> dict[str, Any]:
         "sites": {
             "enabled": selected_sites,
         },
-        "logging": {
-            "level": log_level,
-        },
+        "logging": {"level": log_level},
     }
+
+    if api_keys:
+        config["api_keys"] = api_keys
 
     if use_custom_dir:
         config["sites"]["custom_dir"] = str(Path(custom_dir).expanduser())
 
     return config
+
+
+def _generate_default_config() -> dict[str, Any]:
+    """生成全默认配置（非交互式模式使用）。"""
+    available = sorted(discover_profiles().keys())
+    return {
+        "general": {
+            "language": "zh",
+            "mode": "simple",
+            "topology": "layered",
+            "default_provider": "gemini-cli",
+            "tool_permission": "ask",
+            "auto_commit": True,
+            "output_dir": str(_DEFAULT_OUTPUT_DIR),
+        },
+        "browser": {"headed": True},
+        "safety": {
+            "min_delay": 1.0,
+            "max_delay": 3.0,
+            "max_requests_per_session": 50,
+            "session_timeout": 3600,
+            "max_consecutive_errors": 5,
+        },
+        "sites": {"enabled": available},
+        "logging": {"level": "INFO"},
+    }
 
 
 def _write_config(config: dict[str, Any], config_path: Path) -> None:
@@ -242,12 +369,24 @@ def _create_directories(config: dict[str, Any]) -> None:
 
 def _show_summary(config: dict[str, Any]) -> None:
     """显示配置摘要。"""
+    general = config["general"]
     table = Table(title="配置摘要", show_header=True, header_style="bold cyan")
     table.add_column("项目", style="cyan", width=20)
     table.add_column("值", style="green")
 
-    table.add_row("模式", config["general"]["mode"])
-    table.add_row("输出目录", config["general"]["output_dir"])
+    lang_label = "中文" if general["language"] == "zh" else "English"
+    topo_label = {
+        "layered": "分层 (Leader→Dispatcher→Executor)",
+        "flat": "扁平",
+        "hybrid": "混合",
+    }.get(general["topology"], general["topology"])
+
+    table.add_row("语言", lang_label)
+    table.add_row("调用模式", topo_label)
+    table.add_row("默认Provider", general["default_provider"])
+    table.add_row("工具权限", general["tool_permission"])
+    table.add_row("自动Commit", str(general["auto_commit"]))
+    table.add_row("输出目录", general["output_dir"])
     table.add_row("浏览器有头", str(config["browser"]["headed"]))
     table.add_row("启用站点", ", ".join(config["sites"]["enabled"]))
     table.add_row("最小延迟", f"{config['safety']['min_delay']}s")
@@ -255,38 +394,14 @@ def _show_summary(config: dict[str, Any]) -> None:
     table.add_row("请求上限", str(config["safety"]["max_requests_per_session"]))
     table.add_row("日志级别", config["logging"]["level"])
 
+    api_keys = config.get("api_keys", {})
+    table.add_row("API密钥", ", ".join(api_keys.keys()) if api_keys else "无")
+
     custom_dir = config.get("sites", {}).get("custom_dir")
     if custom_dir:
         table.add_row("自定义配置目录", custom_dir)
 
     console.print(table)
-
-
-def _generate_default_config() -> dict[str, Any]:
-    """生成全默认配置（非交互式模式使用）。"""
-    available = sorted(discover_profiles().keys())
-    return {
-        "general": {
-            "mode": "simple",
-            "output_dir": str(_DEFAULT_OUTPUT_DIR),
-        },
-        "browser": {
-            "headed": True,
-        },
-        "safety": {
-            "min_delay": 1.0,
-            "max_delay": 3.0,
-            "max_requests_per_session": 50,
-            "session_timeout": 3600,
-            "max_consecutive_errors": 5,
-        },
-        "sites": {
-            "enabled": available,
-        },
-        "logging": {
-            "level": "INFO",
-        },
-    }
 
 
 def init_command(
@@ -350,7 +465,7 @@ def init_command(
     # 选择模式
     if not mode:
         console.print("\n请选择配置模式:")
-        console.print("  [bold green]1) 快速开始[/] — 2 个问题，推荐新用户")
+        console.print("  [bold green]1) 快速开始[/] — 3 个问题，推荐新用户")
         console.print("  [bold magenta]2) 专家模式[/] — 逐项配置所有参数")
         choice = typer.prompt("选择", default="1", show_default=False)
         mode = "simple" if choice != "2" else "expert"
@@ -368,15 +483,34 @@ def init_command(
     # 显示摘要
     _show_summary(cfg)
 
-    # 完成提示
-    console.print(
-        Panel.fit(
-            "[bold green]初始化完成！[/]\n\n"
-            "下一步:\n"
-            f"  1. 编辑配置: {config_path}\n"
-            "  2. 安装浏览器: playwright install chromium\n"
-            "  3. 启动对话: multimind chat\n"
-            "\n如需重新配置: multimind init --force",
-            border_style="green",
+    # 将 API key 写入环境变量提示
+    api_keys = cfg.get("api_keys", {})
+    if api_keys:
+        console.print(
+            Panel.fit(
+                "[bold green]初始化完成！[/]\n\n"
+                "[bold]API 密钥已保存到配置文件。[/]\n"
+                "同时建议设置环境变量（重启后仍可用）:\n"
+                + "\n".join(
+                    f"  export {k.upper().replace('-', '_')}_API_KEY=your_key"
+                    for k in api_keys
+                )
+                + "\n\n下一步:\n"
+                "  1. 直接运行: multimind\n"
+                "  2. 查看Provider: multimind providers\n"
+                "  3. 重新配置: multimind init --force",
+                border_style="green",
+            )
         )
-    )
+    else:
+        console.print(
+            Panel.fit(
+                "[bold green]初始化完成！[/]\n\n"
+                "下一步:\n"
+                "  1. 直接运行: multimind\n"
+                "  2. 查看Provider: multimind providers\n"
+                "  3. 重新配置: multimind init --force\n"
+                "  4. 配置API Key: multimind init --mode expert",
+                border_style="green",
+            )
+        )
