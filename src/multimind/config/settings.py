@@ -1,6 +1,6 @@
 """应用配置 — TOML 配置加载与验证。
 
-配置文件位于 ``~/.multimind/config.toml``，使用 pydantic 验证。
+配置文件位于 ``~/.multimind/config.toml``，使用 dataclass 验证。
 """
 
 from __future__ import annotations
