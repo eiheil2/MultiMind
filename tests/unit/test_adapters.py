@@ -116,12 +116,107 @@ class TestAdapterAsk:
 
     @pytest.mark.asyncio
     async def test_cli_reuse_adapter_ask_yields_output(self) -> None:
-        """CLIReuseAdapter.ask yields a non-empty stream mentioning the prompt."""
+        """CLIReuseAdapter.ask yields a non-empty stream.
+
+        In CI / environments without the actual CLI installed, the adapter
+        gracefully degrades with an installation hint.  In environments with
+        the CLI present it invokes the real subprocess.
+        """
 
         adapter = CLIReuseAdapter(_config("gemini-cli", ChannelType.CLI_REUSE))
         output = await _collect(adapter.ask("hello world"))
         assert len(output) > 0
-        assert "CLI" in output or "cli" in output
+        # 降级消息包含安装提示
+        assert "安装" in output or "gemini" in output.lower() or "CLI" in output
+
+    @pytest.mark.asyncio
+    async def test_cli_reuse_adapter_not_installed_graceful(self) -> None:
+        """When CLI is missing, adapter yields a helpful install hint and
+        does NOT crash."""
+
+        adapter = CLIReuseAdapter(
+            _config("nonexistent-cli", ChannelType.CLI_REUSE, endpoint="no-such-cmd"),
+        )
+        output = await _collect(adapter.ask("test"))
+        assert len(output) > 0
+        assert "未安装" in output or "install" in output.lower()
+
+    @pytest.mark.asyncio
+    async def test_cli_reuse_adapter_with_mock_subprocess(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With a mocked subprocess that returns valid JSON, the adapter
+        extracts the ``response`` field correctly."""
+
+        import asyncio as _asyncio_mod
+
+        async def _mock_exec(*args, **kwargs):  # noqa: ANN202
+            class _FakeProc:
+                returncode = 0
+
+                async def communicate(self):  # noqa: ANN202
+                    return (
+                        b'{"response": "Hello from mock CLI", "stats": {}}',
+                        b"",
+                    )
+
+            return _FakeProc()
+
+        monkeypatch.setattr(_asyncio_mod, "create_subprocess_exec", _mock_exec)
+        monkeypatch.setattr("shutil.which", lambda _cmd: "/fake/path/to/cli")
+
+        adapter = CLIReuseAdapter(_config("gemini-cli", ChannelType.CLI_REUSE))
+        output = await _collect(adapter.ask("hello"))
+        assert "Hello from mock CLI" in output
+
+    @pytest.mark.asyncio
+    async def test_cli_reuse_adapter_mock_non_json_fallback(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If CLI returns plain text (not JSON), the adapter falls back to
+        using the raw output."""
+
+        import asyncio as _asyncio_mod
+
+        async def _mock_exec(*args, **kwargs):  # noqa: ANN202
+            class _FakeProc:
+                returncode = 0
+
+                async def communicate(self):  # noqa: ANN202
+                    return (b"Plain text response from CLI", b"")
+
+            return _FakeProc()
+
+        monkeypatch.setattr(_asyncio_mod, "create_subprocess_exec", _mock_exec)
+        monkeypatch.setattr("shutil.which", lambda _cmd: "/fake/path/to/cli")
+
+        adapter = CLIReuseAdapter(_config("opencode-free", ChannelType.CLI_REUSE))
+        output = await _collect(adapter.ask("hello"))
+        assert "Plain text response from CLI" in output
+
+    @pytest.mark.asyncio
+    async def test_cli_reuse_adapter_mock_nonzero_exit(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When CLI exits non-zero, the adapter yields an error message."""
+
+        import asyncio as _asyncio_mod
+
+        async def _mock_exec(*args, **kwargs):  # noqa: ANN202
+            class _FakeProc:
+                returncode = 1
+
+                async def communicate(self):  # noqa: ANN202
+                    return (b"", b"auth error: not logged in")
+
+            return _FakeProc()
+
+        monkeypatch.setattr(_asyncio_mod, "create_subprocess_exec", _mock_exec)
+        monkeypatch.setattr("shutil.which", lambda _cmd: "/fake/path/to/cli")
+
+        adapter = CLIReuseAdapter(_config("gemini-cli", ChannelType.CLI_REUSE))
+        output = await _collect(adapter.ask("hello"))
+        assert "失败" in output or "error" in output.lower() or "auth" in output.lower()
 
     @pytest.mark.asyncio
     async def test_api_client_adapter_ask_yields_output(self) -> None:
@@ -144,9 +239,14 @@ class TestAdapterAsk:
 
     @pytest.mark.asyncio
     async def test_public_endpoint_adapter_ask_yields_output(self) -> None:
-        """PublicEndpointAdapter.ask yields a non-empty zero-auth stream."""
+        """PublicEndpointAdapter.ask yields a non-empty zero-auth stream.
 
-        adapter = PublicEndpointAdapter(_config("opencode", ChannelType.PUBLIC_ENDPOINT))
+        Note: as of the opencode-free → CLI_REUSE migration, this adapter
+        is no longer used by built-in providers.  The test verifies the
+        adapter class still functions for user-defined providers.
+        """
+
+        adapter = PublicEndpointAdapter(_config("custom-public", ChannelType.PUBLIC_ENDPOINT))
         output = await _collect(adapter.ask("free request"))
         assert len(output) > 0
         assert "public" in output.lower() or "endpoint" in output.lower()

@@ -152,9 +152,10 @@ def init_default_providers(quota_db: str | Path | None = None) -> None:
         ),
         ProviderConfig(
             name="opencode-free",
-            channel=ChannelType.PUBLIC_ENDPOINT,
-            model="glm-5-free",
-            tags=("free", "zero-config"),
+            channel=ChannelType.CLI_REUSE,
+            model="copilot-gpt-4o",
+            endpoint="opencode",
+            tags=("free", "oauth"),
             priority=30,
             daily_quota=-1,
             rpm_limit=60,
