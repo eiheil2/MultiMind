@@ -1,0 +1,47 @@
+# 豆包站点配置 — doubao.com
+# 选择器需根据实际 DOM 结构验证后更新
+
+[site]
+name = "doubao"
+url = "https://www.doubao.com/chat"
+login_url = "https://www.doubao.com/login"
+
+[selectors]
+input_box = "textarea[data-testid='chat-input']"
+send_button = "button[aria-label='发送']"
+response_container = "div.message-content"
+stop_button = "button[aria-label='停止']"
+login_redirect = "div.login-modal"
+mode_container = "div.mode-toggle"
+
+[[modes]]
+name = "quick"
+label = "快速问答"
+selector = "div.mode-toggle button:nth-child(1)"
+
+[[modes]]
+name = "standard"
+label = "标准模式"
+selector = "div.mode-toggle button:nth-child(2)"
+
+[safety]
+min_delay = 0.8
+max_delay = 2.5
+max_requests_per_session = 60
+session_timeout = 3600
+headed = true
+max_consecutive_errors = 5
+
+[completion]
+method = "stop_button_disappear"
+timeout = 90
+stable_duration = 1.5
+poll_interval = 0.3
+
+[capabilities]
+streaming = true
+file_upload = true
+multi_turn = true
+mode_switching = true
+max_input_length = 28000
+custom = []
