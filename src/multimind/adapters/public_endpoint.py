@@ -30,8 +30,8 @@ class PublicEndpointAdapter(AIAdapter):
 
     channel_type = ChannelType.PUBLIC_ENDPOINT
 
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
+        super().__init__(config, quota=quota)
         self._endpoint: str = config.endpoint or "https://api.opencode.ai/v1/chat/completions"
 
     async def ask(

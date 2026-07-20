@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
 from multimind.core.constants import DEFAULT_CONFIG_PATH
@@ -77,6 +77,16 @@ class AppConfig:
     api_keys: dict[str, str] = field(default_factory=dict)
 
 
+def _filter_fields(spec_cls: type, data: dict[str, Any]) -> dict[str, Any]:
+    """仅保留 dataclass 已知字段，过滤 TOML 中的未知键。
+
+    防止配置文件中出现废弃/拼写错误的字段时，``**kwargs`` 展开抛出
+    ``TypeError: unexpected keyword argument`` 导致整个配置加载失败。
+    """
+    known = {f.name for f in fields(spec_cls)}
+    return {k: v for k, v in data.items() if k in known}
+
+
 def load_config(config_path: Path | None = None) -> AppConfig:
     """加载配置文件。
 
@@ -99,8 +109,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     with open(path, "rb") as f:
         data = tomllib.load(f)
 
-    git_spec = GitConfigSpec(**data.get("git", {}))
-    memory_spec = MemoryConfigSpec(**data.get("memory", {}))
+    git_spec = GitConfigSpec(**_filter_fields(GitConfigSpec, data.get("git", {})))
+    memory_spec = MemoryConfigSpec(**_filter_fields(MemoryConfigSpec, data.get("memory", {})))
 
     general = data.get("general", {})
 

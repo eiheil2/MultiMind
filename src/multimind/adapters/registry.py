@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from multimind.adapters.base import create_adapter
 from multimind.core.types import ChannelType, ProviderConfig
+from multimind.routing.quota import QuotaTracker
 
 if TYPE_CHECKING:
     from multimind.core.interfaces import AIAdapter
@@ -27,9 +29,17 @@ class ProviderRegistry:
     如需多线程访问，应加锁。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, quota_db: str | Path = ":memory:") -> None:
         self._providers: dict[str, ProviderConfig] = {}
         self._adapters: dict[str, AIAdapter] = {}
+        # 全注册表共享一个额度追踪器：所有适配器的 remaining_quota /
+        # record_usage 都读写它，保证额度判断与持久化同源。
+        self._quota = QuotaTracker(quota_db)
+
+    @property
+    def quota_tracker(self) -> QuotaTracker:
+        """共享额度追踪器。"""
+        return self._quota
 
     def register(self, config: ProviderConfig) -> None:
         """注册一个 provider。
@@ -40,7 +50,7 @@ class ProviderRegistry:
         if config.name in self._providers:
             logger.warning("Overwriting existing provider: %s", config.name)
         self._providers[config.name] = config
-        self._adapters[config.name] = create_adapter(config)
+        self._adapters[config.name] = create_adapter(config, quota=self._quota)
         logger.info("Registered provider: %s (channel=%s)", config.name, config.channel.value)
 
     def get(self, name: str) -> AIAdapter | None:
@@ -103,12 +113,19 @@ def reset_registry() -> None:
     _registry = ProviderRegistry()
 
 
-def init_default_providers() -> None:
-    """初始化默认 provider（框架验证用）。
+def init_default_providers(quota_db: str | Path | None = None) -> None:
+    """初始化 provider 注册表（框架默认 + 用户 config.toml 配置）。
 
-    实际使用时，provider 配置从 ``~/.multimind/config.toml`` 加载。
-    没有配置 API key 的 provider 会被跳过，不注册。
+    重建全局单例并注入共享额度追踪器；随后注册内置默认 provider，
+    再加载 ``~/.multimind/config.toml`` 中用户自定义的 provider。
+
+    Args:
+        quota_db: 额度库路径。None 使用内存库（测试/单次进程隔离）；
+            真实 CLI 应传入持久化路径以跨进程累计额度。
     """
+    global _registry  # noqa: PLW0603
+    _registry = ProviderRegistry(quota_db=quota_db or ":memory:")
+
     import os
 
     configs: list[ProviderConfig] = [
@@ -164,6 +181,9 @@ def init_default_providers() -> None:
             continue
         _registry.register(cfg)
 
+    # 加载用户在 config.toml 中定义的 provider
+    _register_user_providers(_registry)
+
     if skipped:
         import sys
 
@@ -173,3 +193,63 @@ def init_default_providers() -> None:
             f"  其他 provider 仍可正常使用。\n",
             file=sys.stderr,
         )
+
+
+def _provider_config_from_dict(data: dict[str, object]) -> ProviderConfig | None:
+    """从 config.toml 的 provider 字典构造 ProviderConfig。
+
+    过滤未知键、做基本校验；非法配置返回 None 并告警。
+    """
+    name = data.get("name")
+    channel = data.get("channel")
+    if not name or not channel:
+        logger.warning("跳过无效 provider 配置（缺少 name/channel）: %s", data)
+        return None
+    try:
+        ch = ChannelType(channel)
+    except ValueError:
+        logger.warning("跳过未知通道类型: %s", channel)
+        return None
+    return ProviderConfig(
+        name=str(name),
+        channel=ch,
+        model=str(data.get("model", "")),
+        api_key=str(data.get("api_key", "")),
+        endpoint=str(data.get("endpoint", "")),
+        tags=tuple(str(t) for t in data.get("tags", [])),  # type: ignore[arg-type]
+        priority=int(data.get("priority", 100)),  # type: ignore[arg-type]
+        daily_quota=int(data.get("daily_quota", -1)),  # type: ignore[arg-type]
+        rpm_limit=int(data.get("rpm_limit", 60)),  # type: ignore[arg-type]
+        max_tokens=int(data.get("max_tokens", 8192)),  # type: ignore[arg-type]
+    )
+
+
+def _register_user_providers(registry: ProviderRegistry) -> None:
+    """把 config.toml 的 ``providers`` 段注册进注册表。
+
+    API 通道若未直接给 key，会尝试从全局 ``api_keys`` 段取；仍无则跳过。
+    """
+    try:
+        from multimind.config.settings import load_config
+    except ImportError:
+        return
+
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001 — 配置损坏不应阻断启动
+        logger.warning("加载 config.toml 失败，跳过用户 provider", exc_info=True)
+        return
+
+    api_keys = cfg.api_keys or {}
+    for raw in cfg.providers:
+        entry = dict(raw)
+        # API 通道无 key 时尝试全局 api_keys 兜底
+        if entry.get("channel") == "api_client" and not entry.get("api_key"):
+            entry["api_key"] = api_keys.get(str(entry.get("name", "")), "")
+        pc = _provider_config_from_dict(entry)
+        if pc is None:
+            continue
+        if pc.channel == ChannelType.API_CLIENT and not pc.api_key:
+            logger.info("跳过 provider '%s'（无 API key）", pc.name)
+            continue
+        registry.register(pc)

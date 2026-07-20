@@ -30,8 +30,8 @@ class APIClientAdapter(AIAdapter):
 
     channel_type = ChannelType.API_CLIENT
 
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
+        super().__init__(config, quota=quota)
         if not config.api_key:
             logger.warning("API provider '%s' has no api_key set", config.name)
         self._endpoint: str = config.endpoint or self._default_endpoint()

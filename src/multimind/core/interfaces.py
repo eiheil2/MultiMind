@@ -33,9 +33,15 @@ class AIAdapter(ABC):
 
     channel_type: ChannelType  # type: ignore[name-defined]  # noqa: F821
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
         self.config = config
-        self._used_today: int = 0
+        # 额度交给统一的 QuotaTracker 管理（单一数据源），避免各适配器
+        # 各算各的、与 SQLite 额度库脱钩。注册表会注入共享实例；
+        # 单独构造时延迟创建一个内存实例作为兜底。
+        if quota is not None:
+            self._quota = quota
+        else:
+            self._quota = _default_quota_tracker()
 
     @abstractmethod
     async def ask(
@@ -58,20 +64,27 @@ class AIAdapter(ABC):
 
     @property
     def remaining_quota(self) -> int:
-        """剩余每日额度（-1 表示无限）。"""
-        if self.config.daily_quota < 0:
-            return 999_999
-        return max(0, self.config.daily_quota - self._used_today)
+        """剩余每日额度（委托 QuotaTracker；-1 表示无限）。"""
+        return self._quota.remaining(self.config.name, self.config.daily_quota)
 
     def record_usage(self, tokens: int = 1) -> None:
-        """记录用量。"""
-        self._used_today += tokens
+        """记录用量（写入共享 QuotaTracker，可跨进程持久化）。"""
+        self._quota.record(self.config.name, tokens)
         logger.debug(
-            "Provider %s usage recorded: +%d tokens (total: %d)",
+            "Provider %s usage recorded: +%d tokens (remaining: %d)",
             self.config.name,
             tokens,
-            self._used_today,
+            self.remaining_quota,
         )
+
+    @property
+    def _used_today(self) -> int:
+        """今日已用量（视图，统一取自共享 QuotaTracker，单一数据源）。
+
+        保留该只读属性以兼容既有调用方/测试对用量计数的观察，
+        避免适配器各自维护一份与额度库脱钩的计数。
+        """
+        return self._quota.get_used(self.config.name)
 
     def __repr__(self) -> str:
         return (
@@ -108,3 +121,14 @@ class ToolProvider(Protocol):
     async def execute(self, tool_name: str, arguments: dict[str, object]) -> str:
         """执行工具调用。"""
         ...
+
+
+def _default_quota_tracker() -> object:
+    """延迟创建一个内存版 QuotaTracker，作为独立构造适配器的兜底。
+
+    延迟导入以避免 ``core.interfaces`` 与 ``routing.quota`` 之间的顶层
+    循环依赖；注册表注入共享实例时不会走到这里。
+    """
+    from multimind.routing.quota import QuotaTracker
+
+    return QuotaTracker()

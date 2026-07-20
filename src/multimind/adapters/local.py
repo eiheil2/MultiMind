@@ -30,8 +30,8 @@ class LocalAdapter(AIAdapter):
 
     channel_type = ChannelType.LOCAL
 
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
+        super().__init__(config, quota=quota)
         self._endpoint: str = config.endpoint or "http://localhost:11434/api/chat"
 
     async def ask(

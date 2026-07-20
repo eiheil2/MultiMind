@@ -26,11 +26,12 @@ _ADAPTER_MAP: dict[ChannelType, type[AIAdapter]] = {
 }
 
 
-def create_adapter(config: ProviderConfig) -> AIAdapter:
+def create_adapter(config: ProviderConfig, quota: object = None) -> AIAdapter:
     """根据通道类型创建适配器。
 
     Args:
         config: Provider 配置。
+        quota: 可选的共享 QuotaTracker 实例；为 None 时适配器使用内存兜底。
 
     Returns:
         对应通道的适配器实例。
@@ -41,4 +42,4 @@ def create_adapter(config: ProviderConfig) -> AIAdapter:
     cls = _ADAPTER_MAP.get(config.channel)
     if cls is None:
         raise AdapterError(f"Unsupported channel type: {config.channel}")
-    return cls(config)
+    return cls(config, quota=quota)

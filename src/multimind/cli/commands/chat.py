@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import select
 import sys
@@ -314,6 +315,27 @@ def _read_input() -> str:
             raise EOFError from None
         return line.rstrip("\n")
 
+    fd = sys.stdin.fileno()
+    try:
+        import termios
+        import tty
+
+        old = termios.tcgetattr(fd)
+        tty.setraw(fd)
+        raw = True
+    except (ImportError, ValueError, OSError):
+        old = None
+        raw = False
+
+    # raw 模式不可用（如 Windows）：降级为行输入
+    if not raw:
+        sys.stdout.write("\x1b[1;38;2;122;162;247m❯\x1b[0m ")
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError from None
+        return line.rstrip("\n")
+
     buf = ""
     shown = 0  # 当前显示的建议行数
     nav_idx = -1  # 输入历史导航索引，-1 表示当前未在浏览历史
@@ -399,97 +421,152 @@ def _read_input() -> str:
 
     draw_prompt()
 
-    while True:
-        char = _read_char()
-        if char is None:
-            # termios 不可用，回退到行输入
-            line = sys.stdin.readline()
-            if not line:
+    try:
+        while True:
+            key = _read_key(raw, fd)
+            if key is None:
+                # EOF（如管道关闭）
                 raise EOFError from None
-            buf = line.rstrip("\n")
-            clear_suggestions()
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            return buf
 
-        # 转义序列处理（方向键等）
-        if char == "\x1b":
-            seq2 = _read_char()
-            if seq2 == "[":
-                seq3 = _read_char()
-                if seq3 == "A":  # ↑ 上箭头 — 历史导航
-                    navigate_history("up")
-                    continue
-                if seq3 == "B":  # ↓ 下箭头 — 历史导航
-                    navigate_history("down")
-                    continue
-                # 其他方向键（C=右, D=左）暂不处理
+            # 方向键：历史导航
+            if key == "up":
+                navigate_history("up")
                 continue
-            # 单独 ESC — 清除当前输入
-            if seq2 is None:
+            if key == "down":
+                navigate_history("down")
+                continue
+
+            # 单独 ESC — 清空当前输入（用 select 超时区分，不会阻塞）
+            if key == "esc":
                 buf = ""
                 clear_suggestions()
                 draw_prompt()
                 continue
-            continue
 
-        if char in ("\r", "\n"):
-            clear_suggestions()
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            return buf
-        if char == "\x03":  # Ctrl+C
-            raise KeyboardInterrupt
-        if char == "\x04":  # Ctrl+D
-            raise EOFError
-        if char == "\x7f":  # Backspace
-            if buf:
-                buf = buf[:-1]
-                nav_idx = -1  # 编辑时退出历史浏览
-                if buf.startswith("/"):
-                    show_suggestions()
-                else:
-                    clear_suggestions()
-                    draw_prompt()
-            continue
-        if char == "\t":  # Tab
-            completed = _tab_complete(buf)
-            if completed != buf:
-                buf = completed
-                nav_idx = -1
-                if buf.startswith("/"):
-                    show_suggestions()
-                else:
-                    clear_suggestions()
-                    draw_prompt()
-            continue
+            if key in ("\r", "\n"):
+                clear_suggestions()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return buf
+            if key == "\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            if key == "\x04":  # Ctrl+D
+                raise EOFError
+            if key == "\x7f":  # Backspace
+                if buf:
+                    buf = buf[:-1]
+                    nav_idx = -1  # 编辑时退出历史浏览
+                    if buf.startswith("/"):
+                        show_suggestions()
+                    else:
+                        clear_suggestions()
+                        draw_prompt()
+                continue
+            if key == "\t":  # Tab
+                completed = _tab_complete(buf)
+                if completed != buf:
+                    buf = completed
+                    nav_idx = -1
+                    if buf.startswith("/"):
+                        show_suggestions()
+                    else:
+                        clear_suggestions()
+                        draw_prompt()
+                continue
 
-        # 任何新字符输入都退出历史浏览
-        nav_idx = -1
-        buf += char
-        if buf.startswith("/"):
-            show_suggestions()
-        else:
-            sys.stdout.write(char)
-            sys.stdout.flush()
-
-
-def _read_char() -> str | None:
-    """读取单个字符（TTY 专用）。"""
-    try:
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
+            # 任何新字符（含多字节 UTF-8）输入都退出历史浏览
+            nav_idx = -1
+            buf += key
+            if buf.startswith("/"):
+                show_suggestions()
+            else:
+                sys.stdout.write(key)
+                sys.stdout.flush()
+    finally:
+        # 无论正常返回还是异常（Ctrl+C / Ctrl+D）都恢复终端原状
         try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        return ch
-    except (ImportError, ValueError, OSError):
+        except (ValueError, OSError):
+            pass
+        sys.stdout.write("\r\x1b[K")
+        sys.stdout.flush()
+
+
+# 增量 UTF-8 解码器：逐字节读取时也能正确拼出多字节字符（如中文），
+# 避免直接 ch.decode() 在首字节处产生乱码。
+_UTF8_DECODER = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+# 单字节推回缓冲：ESC 探测误吞的非转义字节在此暂存，供下一次 _read_key 返回，
+# 避免「ESC 后紧跟普通字符」被吞掉（如 ESC 清行后紧接着输入的字符）。
+_PUSHBACK: bytes = b""
+
+
+_ARROW_MAP = {b"A": "up", b"B": "down", b"C": "left", b"D": "right"}
+
+
+def _read_key(raw: bool, fd: int) -> str | None:
+    """读取单个按键，返回语义化按键名或原始字符。
+
+    raw=True（已处于 raw 模式）时：
+
+    - 首个字节用阻塞 ``os.read`` 等待按键（保证调用方「等待下一键」的语义）；
+    - 若首字节是 ESC，用 ``select`` 超时（0.3s）探测后续字节，区分「单独
+      ESC」与「方向键转义序列（如 ``\\x1b[B``）」。
+
+    说明：本环境部分 pty 实现的分包投递存在延迟，转义序列的后续字节不会
+    立即可读；实测 ``select`` 超时取 0.3s 可稳定区分（方向键字节已缓冲、
+    select 立即就绪，单独 ESC 才超时）。该延迟仅作用于「单独按 ESC」的
+    判定（约 0.3s），方向键与正常输入无感知延迟。普通字符通过增量解码器
+    返回，正确处理多字节输入（如中文）。
+
+    ESC 探测若误吞了非转义字节（ESC 后紧跟普通字符），会将其存入
+    :data:`_PUSHBACK`，下一次调用原样返回，避免输入字符丢失。
+
+    raw=False 时降级为逐字符行读取（无 ESC 取消能力）。
+
+    Returns:
+        ``"esc"`` / ``"up"`` / ``"down"`` / ``"left"`` / ``"right"`` 等
+        语义按键，或单个字符，或 None（EOF）。
+    """
+    global _PUSHBACK
+    if _PUSHBACK:
+        data = _PUSHBACK
+        _PUSHBACK = b""
+        return _UTF8_DECODER.decode(data)
+
+    if not raw:
+        try:
+            ch = sys.stdin.read(1)
+        except (OSError, ValueError):
+            return None
+        return ch or None
+
+    # 首个字节：阻塞等待按键
+    try:
+        ch = os.read(fd, 1)
+    except OSError:
         return None
+    if not ch:
+        return None
+    if ch != b"\x1b":
+        return _UTF8_DECODER.decode(ch)
+
+    # 读到 ESC：用 select 超时探测后续字节，区分单独 ESC 与方向键转义序列
+    _UTF8_DECODER.reset()  # 丢弃可能残留的半截多字节序列
+    rlist, _, _ = select.select([fd], [], [], 0.3)
+    if not rlist:
+        return "esc"
+    b2 = os.read(fd, 1)
+    if b2 == b"[":
+        r2, _, _ = select.select([fd], [], [], 0.3)
+        if not r2:
+            return "esc"
+        b3 = os.read(fd, 1)
+        return _ARROW_MAP.get(b3, "esc")
+    # 非 ``[`` 开头：不是方向键（可能是 ESC 后紧跟的普通字符或 Alt+组合键）。
+    # 将误吞的字节推回，下一次原样返回，避免输入丢失。
+    _PUSHBACK = b2
+    return "esc"
 
 
 def _tab_complete(buf: str) -> str:
@@ -605,51 +682,11 @@ def _interactive_select(
             sys.stdout.flush()
 
     def read_key() -> str | None:
-        """读取单个按键，区分 ESC 与方向键。
+        """读取单个按键，委托给共享的模块级 ``_read_key``。
 
-        Returns:
-            语义化按键名（"esc"/"up"/"down"/"left"/"right"）、
-            原始单字符、或 None（EOF）。
+        保持选择器内唯一的按键读取入口，避免与 ``_read_input`` 重复实现。
         """
-        if raw:
-            ch = os.read(fd, 1)
-            if not ch:
-                return None
-            if ch == b"\x1b":
-                # 等待后续字节，区分单独 ESC 与转义序列（如方向键）
-                rlist, _, _ = select.select([fd], [], [], 0.15)
-                if not rlist:
-                    return "esc"
-                # 只读取紧随其后的「[」与最终字节，绝不吞噬后续按键
-                b2 = os.read(fd, 1)
-                if b2 == b"[":
-                    r3, _, _ = select.select([fd], [], [], 0.05)
-                    if not r3:
-                        return "esc"
-                    b3 = os.read(fd, 1)
-                    return {
-                        b"A": "up",
-                        b"B": "down",
-                        b"C": "left",
-                        b"D": "right",
-                    }.get(b3, "esc")
-                # Alt+组合键或其他转义，按 ESC 处理
-                return "esc"
-            return ch.decode("utf-8", errors="replace")
-
-        # 降级：使用逐字符读取（无 select 超时，ESC 无法可靠取消）
-        char = _read_char()
-        if char is None:
-            return None
-        if char == "\x1b":
-            seq2 = _read_char()
-            if seq2 == "[":
-                seq3 = _read_char()
-                return {"A": "up", "B": "down", "C": "left", "D": "right"}.get(
-                    seq3 or "", None
-                )
-            return "esc"
-        return char
+        return _read_key(raw, fd)
 
     try:
         emit_block()  # 首次绘制（当前行即标题行）

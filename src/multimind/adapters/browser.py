@@ -78,8 +78,8 @@ class BrowserAdapter(AIAdapter):
 
     channel_type = ChannelType.BROWSER
 
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
+        super().__init__(config, quota=quota)
         self._storage_state: Path | None = None
         self._site_adapter: SiteAdapter | None = None
         self._site_name: str = _SITE_NAME_MAP.get(config.name, "")

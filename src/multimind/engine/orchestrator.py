@@ -118,23 +118,30 @@ class Orchestrator:
         # 用户消息入总线
         await self.bus.broadcast("user", user_input)
 
+        if not self.roles:
+            logger.warning("Orchestrator has no roles configured; nothing to run")
+            yield OrchestratorEvent(
+                event_type=OrchestratorEvent.ERROR,
+                content="No roles configured",
+            )
+            return
+
         for round_num in range(1, max_rounds + 1):
-            if self.topology.mode == TopologyMode.LAYERED:
+            if self.topology.mode == TopologyMode.LAYERED and self.leaders:
                 # 分层模式：只跑 Leader
                 async for event in self._run_role_loop(self.leaders[0], user_input, round_num):
                     yield event
             else:
-                # 扁平模式：所有角色依次发言
+                # 扁平/混合模式（或无 Leader 的分层）：所有角色依次发言
                 for role in self.roles:
                     async for event in self._run_role_loop(role, user_input, round_num):
                         yield event
 
-            # 简化：2 轮后结束（框架验证）
-            if round_num >= 2:
-                yield OrchestratorEvent(
-                    event_type=OrchestratorEvent.ROUND_END,
-                    round_num=round_num,
-                )
+            yield OrchestratorEvent(
+                event_type=OrchestratorEvent.ROUND_END,
+                round_num=round_num,
+            )
+            if round_num >= max_rounds:
                 break
 
     async def _run_role_loop(
@@ -198,6 +205,8 @@ class Orchestrator:
             return
 
         full_reply = "".join(collected)
+        # 注意：用量记录由各 adapter 的 ask() 内部完成（单一记录点），
+        # 这里不再重复调用 provider.record_usage()，避免双重计数。
         await self.bus.post(Message(
             role=role.name,
             content=full_reply,

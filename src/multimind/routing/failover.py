@@ -44,12 +44,30 @@ class FailoverChain:
 
         Returns:
             下一个可用 provider 名称，无则返回 None。
+
+        约定（与既有测试契约一致）：
+
+        - 多 provider 链中，链尾失败时回绕到链首（始终提供一个重试候选）。
+        - 单 provider 链中，失败即自身，无法转移到别的 provider，返回 None，
+          避免调用方在 ``next_available`` 上无限重试同一个已失败的 provider。
+        - 失败的 provider 不在链中时，回退到链首（只要不是它自己）。
         """
         chain = self.get_chain(required_tag)
+        if not chain:
+            return None
+
         try:
             idx = chain.index(failed)
-            if idx + 1 < len(chain):
-                return chain[idx + 1]
         except ValueError:
-            pass
-        return chain[0] if chain else None
+            # 失败的 provider 不在候选链中：回退到最高优先级候选
+            return chain[0] if chain[0] != failed else None
+
+        if idx + 1 < len(chain):
+            return chain[idx + 1]
+
+        # failed 位于链尾
+        if len(chain) == 1:
+            # 单 provider：无法转移到自身，放弃
+            return None
+        # 多 provider：回绕到链首
+        return chain[0]

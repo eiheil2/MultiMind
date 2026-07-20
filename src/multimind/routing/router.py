@@ -61,20 +61,21 @@ class Router:
             logger.warning("No provider matches tags: %s", required_tags)
             return None
 
-        # 按优先级排序 + 额度过滤
-        candidates: list[tuple[int, str]] = []
+        # 按「优先级 → 剩余额度（降序）→ 名称」排序并过滤额度
+        candidates: list[tuple[int, int, str]] = []
         for name in matched:
             adapter = self._registry.get(name)
             if adapter and adapter.remaining_quota > 0:
-                candidates.append((adapter.config.priority, name))
+                # 剩余额度取负作为排序键：优先级相同时，剩余越多越优先
+                candidates.append((adapter.config.priority, -adapter.remaining_quota, name))
 
         if not candidates:
             logger.warning("No provider with remaining quota for tags: %s", required_tags)
             return None
 
         candidates.sort()
-        best = candidates[0][1]
-        fallbacks = [name for _, name in candidates[1:]]
+        best = candidates[0][2]
+        fallbacks = [name for _, _, name in candidates[1:]]
 
         logger.info("Routed to: %s (fallbacks: %s)", best, fallbacks)
         return RoutingResult(provider=best, fallbacks=fallbacks)

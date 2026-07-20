@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
@@ -87,8 +90,6 @@ class GroupChatBus:
 
     def subscribe(self) -> Any:
         """订阅新消息（返回 asyncio.Queue）。"""
-        import asyncio
-
         q: asyncio.Queue[Message] = asyncio.Queue()
         self._listeners.append(q)
         return q
@@ -149,7 +150,7 @@ class GroupChatBus:
     async def _fire_hook(self, event: str, data: Any) -> None:
         for cb in self._event_hooks.get(event, []):
             result = cb(data)
-            if asyncio.iscoroutine(result):  # type: ignore[name-defined]
+            if inspect.iscoroutine(result):
                 await result
 
     def history(self, limit: int = 50) -> list[Message]:
@@ -160,12 +161,24 @@ class GroupChatBus:
         """为指定角色组装上下文。
 
         包含 @mention 该角色的消息和所有广播消息。
+
+        使用词边界正则匹配 ``@mention``，避免把邮箱地址
+        （如 ``user@example.com``）中的 ``@`` 误判为 @mention，
+        从而错误地从所有角色的上下文中剔除；同时避免把角色名
+        当作子串匹配（如角色 ``exec`` 误匹配 ``@executor``）。
         """
-        return [
-            m for m in self._messages
-            if f"@{role_name}" in m.content or "@" not in m.content
-        ]
+        mention_re = re.compile(rf"(?<!\w)@{re.escape(role_name)}\b")
+        result: list[Message] = []
+        for m in self._messages:
+            # 明确 @mention 指向本角色 → 包含
+            if mention_re.search(m.content):
+                result.append(m)
+                continue
+            # 不含任何 @mention（邮箱中的 @ 不算）→ 视为广播，包含
+            if not _MENTION_RE.search(m.content):
+                result.append(m)
+        return result
 
 
-# 在模块级别导入 asyncio（避免循环引用问题）
-import asyncio  # noqa: E402  # isort: skip
+# 匹配「词边界 @ + 单词」形式的 @mention（邮箱地址的 @ 因前有字母而不匹配）
+_MENTION_RE = re.compile(r"(?<!\w)@\w")

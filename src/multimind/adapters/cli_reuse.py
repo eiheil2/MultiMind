@@ -30,8 +30,8 @@ class CLIReuseAdapter(AIAdapter):
 
     channel_type = ChannelType.CLI_REUSE
 
-    def __init__(self, config: ProviderConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: ProviderConfig, quota: object = None) -> None:
+        super().__init__(config, quota=quota)
         self._cli_command: str = config.endpoint or self._detect_cli_command()
 
     def _detect_cli_command(self) -> str:
