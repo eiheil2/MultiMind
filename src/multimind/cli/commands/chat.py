@@ -503,6 +503,159 @@ def _tab_complete(buf: str) -> str:
     return buf
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 通用方向键选择器
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _interactive_select(
+    title: str,
+    options: list[tuple[str, str]],
+    hint: str = "↑↓ 选择 · Enter 确认 · Esc 取消",
+) -> str | None:
+    """通用方向键选择器。
+
+    Args:
+        title: 选择器标题。
+        options: 选项列表，每项为 (label, value) 元组。
+            label 用于显示，value 为返回值。
+        hint: 底部提示文字。
+
+    Returns:
+        选中的 value，取消则返回 None。
+    """
+    if not options:
+        console.print(f"  [{C_WARNING}]● 没有可选项[/]\n")
+        return None
+
+    # 非 TTY 环境回退到数字选择
+    if not sys.stdin.isatty():
+        console.print(f"\n  [{C_ACCENT}]{title}[/]")
+        console.print(f"  [{C_DIM}]{'─' * 48}[/]")
+        for i, (label, _) in enumerate(options, 1):
+            console.print(f"  [{C_MUTED}]{i}.[/] [{C_TEXT}]{label}[/]")
+        console.print()
+        try:
+            choice = input(f"  选择 (1-{len(options)}): ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return options[idx][1]
+        except (ValueError, EOFError):
+            pass
+        return None
+
+    selected = 0
+    count = len(options)
+
+    def render() -> None:
+        # 移动光标到选择区域开始处
+        sys.stdout.write("\r\x1b[K")
+        sys.stdout.write(f"\x1b[1;38;2;122;162;247m{title}\x1b[0m\n")
+
+        for i, (label, _value) in enumerate(options):
+            sys.stdout.write("\r\x1b[K")
+            if i == selected:
+                sys.stdout.write(
+                    f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m"
+                )
+            else:
+                sys.stdout.write(
+                    f"  \x1b[38;2;102;102;102m  {label}\x1b[0m"
+                )
+            sys.stdout.write("\n")
+
+        sys.stdout.write("\r\x1b[K")
+        sys.stdout.write(f"\x1b[38;2;68;68;68m  {hint}\x1b[0m")
+        sys.stdout.flush()
+
+    def clear_render() -> None:
+        # 清除选择区域（标题 + 选项 + 提示行）
+        total_lines = count + 2  # 标题 + 选项 + 提示
+        sys.stdout.write(f"\x1b[{total_lines}A")
+        for _ in range(total_lines):
+            sys.stdout.write("\r\x1b[K\n")
+        sys.stdout.write(f"\x1b[{total_lines}A")
+        sys.stdout.flush()
+
+    render()
+
+    while True:
+        char = _read_char()
+        if char is None:
+            clear_render()
+            return None
+
+        # 方向键
+        if char == "\x1b":
+            seq2 = _read_char()
+            if seq2 == "[":
+                seq3 = _read_char()
+                if seq3 == "A":  # ↑
+                    selected = (selected - 1) % count
+                elif seq3 == "B":  # ↓
+                    selected = (selected + 1) % count
+                else:
+                    continue
+                # 重绘
+                sys.stdout.write(f"\x1b[{count + 1}A")
+                for i, (label, _value) in enumerate(options):
+                    sys.stdout.write("\r\x1b[K")
+                    if i == selected:
+                        sys.stdout.write(
+                            f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m\n"
+                        )
+                    else:
+                        sys.stdout.write(
+                            f"  \x1b[38;2;102;102;102m  {label}\x1b[0m\n"
+                        )
+                sys.stdout.flush()
+                continue
+            # 单独 ESC
+            if seq2 is None:
+                clear_render()
+                console.print(f"  [{C_MUTED}]已取消[/]\n")
+                return None
+            continue
+
+        # Enter 确认
+        if char in ("\r", "\n"):
+            clear_render()
+            return options[selected][1]
+
+        # Ctrl+C / Ctrl+D
+        if char == "\x03":
+            raise KeyboardInterrupt
+        if char == "\x04":
+            clear_render()
+            return None
+
+        # q 退出
+        if char == "q":
+            clear_render()
+            console.print(f"  [{C_MUTED}]已取消[/]\n")
+            return None
+
+        # 数字快捷键
+        if char.isdigit():
+            idx = int(char) - 1
+            if 0 <= idx < count:
+                selected = idx
+                # 重绘
+                sys.stdout.write(f"\x1b[{count + 1}A")
+                for i, (label, _value) in enumerate(options):
+                    sys.stdout.write("\r\x1b[K")
+                    if i == selected:
+                        sys.stdout.write(
+                            f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m\n"
+                        )
+                    else:
+                        sys.stdout.write(
+                            f"  \x1b[38;2;102;102;102m  {label}\x1b[0m\n"
+                        )
+                sys.stdout.flush()
+                continue
+
+
 def _print_user_message(text: str) -> None:
     """打印用户消息 — 极简风格，无气泡框。"""
     console.print(f"[{C_USER}]❯[/] {text}")
@@ -882,18 +1035,80 @@ def _show_config() -> None:
 
 
 def _handle_set(args: str) -> None:
-    """处理 /set 命令。"""
+    """处理 /set 命令 — 无参数时弹出方向键选择配置项。"""
+    # 可设置项及其描述
+    settable = [
+        ("language — 语言 (zh/en)", "language"),
+        ("topology — 拓扑模式 (layered/flat/hybrid)", "topology"),
+        ("default_provider — 默认 Provider", "default_provider"),
+        ("tool_permission — 工具权限 (none/ask/auto/all)", "tool_permission"),
+        ("auto_commit — 自动提交 (true/false)", "auto_commit"),
+        ("output_dir — 输出目录", "output_dir"),
+        ("log_level — 日志级别 (DEBUG/INFO/WARNING/ERROR)", "log_level"),
+        ("api_key — API Key (provider key)", "api_key"),
+    ]
+
     if not args:
-        console.print(f"\n  [{C_WARNING}]用法: /set <key> <value>[/]")
-        console.print(f"  [{C_MUTED}]可设置项:[/]")
-        keys = [
-            "language", "topology", "default_provider",
-            "tool_permission", "auto_commit", "output_dir",
-            "log_level", "api_key",
-        ]
-        for k in keys:
-            console.print(f"  [{C_DIM}]  {k}[/]")
-        console.print()
+        selected = _interactive_select("选择要修改的配置项", settable)
+        if selected is None:
+            return
+
+        # 特殊处理某些 key 的值选择
+        if selected == "language":
+            cfg = load_config()
+            value = _interactive_select(
+                f"选择语言（当前: {cfg.language}）",
+                [("中文 (zh)", "zh"), ("English (en)", "en")],
+            )
+            if value is None:
+                return
+        elif selected == "topology":
+            cfg = load_config()
+            value = _interactive_select(
+                f"选择拓扑（当前: {cfg.topology}）",
+                [
+                    ("分层 (layered)", "layered"),
+                    ("扁平 (flat)", "flat"),
+                    ("混合 (hybrid)", "hybrid"),
+                ],
+            )
+            if value is None:
+                return
+        elif selected == "tool_permission":
+            cfg = load_config()
+            value = _interactive_select(
+                f"选择权限（当前: {cfg.tool_permission}）",
+                [
+                    ("none — 无工具", "none"),
+                    ("ask — 每次询问", "ask"),
+                    ("auto — 自动执行", "auto"),
+                    ("all — 全部自动", "all"),
+                ],
+            )
+            if value is None:
+                return
+        elif selected == "auto_commit":
+            cfg = load_config()
+            value = _interactive_select(
+                f"自动提交（当前: {cfg.auto_commit}）",
+                [("开启 (true)", "true"), ("关闭 (false)", "false")],
+            )
+            if value is None:
+                return
+        else:
+            # 需要手动输入值
+            console.print(f"  [{C_MUTED}]请输入 {selected} 的值:[/] ", end="")
+            try:
+                value = input().strip()
+            except EOFError:
+                return
+            if not value:
+                console.print(f"  [{C_MUTED}]已取消[/]\n")
+                return
+
+        result = update_config(selected, value)
+        console.print(f"  [{C_SUCCESS}]● {result}[/]")
+        console.print(f"  [{C_DIM}]  重启后生效[/]\n")
         return
 
     parts = args.split(maxsplit=1)
@@ -909,14 +1124,28 @@ def _handle_set(args: str) -> None:
 
 
 def _handle_lang(args: str) -> None:
-    """快速切换语言。"""
-    if not args or args.strip() not in ("zh", "en"):
+    """快速切换语言 — 无参数时弹出方向键选择器。"""
+    if not args:
+        # 弹出选择器
         cfg = load_config()
-        console.print(f"\n  [{C_MUTED}]当前语言: {cfg.language}[/]")
-        console.print(f"  [{C_DIM}]用法: /lang zh|en[/]\n")
-        return
+        options = [
+            ("中文 (zh)", "zh"),
+            ("English (en)", "en"),
+        ]
+        selected = _interactive_select(
+            f"选择语言（当前: {cfg.language}）",
+            options,
+        )
+        if selected is None:
+            return
+        lang = selected
+    else:
+        lang = args.strip()
+        if lang not in ("zh", "en"):
+            console.print(f"  [{C_ERROR}]✗ 无效语言: {lang}[/]")
+            console.print(f"  [{C_MUTED}]可选: zh, en[/]\n")
+            return
 
-    lang = args.strip()
     result = update_config("language", lang)
     console.print(f"  [{C_SUCCESS}]● {result}[/]")
     if lang == "en":
@@ -948,27 +1177,34 @@ def _handle_apikey(args: str) -> None:
 
 
 def _handle_model(args: str, orchestrator: Orchestrator) -> None:
-    """切换默认 Provider。"""
+    """切换默认 Provider — 无参数时弹出方向键选择器。"""
     if not args:
-        # 列出可用 provider
-        console.print(f"\n  [{C_ACCENT}]可用 Provider[/]")
-        console.print(f"  [{C_DIM}]{'─' * 48}[/]")
-        for adapter in orchestrator.registry.all().values():
-            name = adapter.config.name
-            model = adapter.config.model
-            console.print(f"  [{C_TEXT}]{name:<20}[/] [{C_MUTED}]{model}[/]")
-        cfg = load_config()
-        current = cfg.default_provider or "(未设置)"
-        console.print(f"\n  [{C_MUTED}]当前默认: {current}[/]")
-        console.print(f"  [{C_DIM}]用法: /model <provider_name>[/]\n")
-        return
+        # 构建选项列表
+        providers = orchestrator.registry.all()
+        if not providers:
+            console.print(f"  [{C_WARNING}]● 没有可用 Provider[/]\n")
+            return
 
-    provider_name = args.strip()
-    # 检查是否已注册
-    if provider_name not in orchestrator.registry.all():
-        console.print(f"  [{C_ERROR}]✗ 未找到 Provider: {provider_name}[/]")
-        console.print(f"  [{C_MUTED}]输入 /model 查看可用 Provider[/]\n")
-        return
+        cfg = load_config()
+        current = cfg.default_provider or ""
+        options = [
+            (f"{name}  [{adapter.config.model}]", name)
+            for name, adapter in providers.items()
+        ]
+        selected = _interactive_select(
+            f"选择默认 Provider（当前: {current or '未设置'}）",
+            options,
+        )
+        if selected is None:
+            return
+        provider_name = selected
+    else:
+        provider_name = args.strip()
+        # 检查是否已注册
+        if provider_name not in orchestrator.registry.all():
+            console.print(f"  [{C_ERROR}]✗ 未找到 Provider: {provider_name}[/]")
+            console.print(f"  [{C_MUTED}]输入 /model 查看可用 Provider[/]\n")
+            return
 
     result = update_config("default_provider", provider_name)
     console.print(f"  [{C_SUCCESS}]● {result}[/]")
@@ -991,37 +1227,58 @@ def _handle_prompt(args: str, orchestrator: Orchestrator) -> None:
     """处理 /prompt 命令 — 查看/编辑/重置角色提示词。
 
     用法:
-      /prompt              — 查看所有角色提示词概览
+      /prompt              — 方向键选择角色查看
       /prompt <tier>       — 查看指定角色的完整提示词
-      /prompt edit <tier>  — 用 $EDITOR 编辑（预填充当前提示词）
-      /prompt reset <tier> — 重置为内置默认
+      /prompt edit [tier]  — 用 $EDITOR 编辑（可方向键选择）
+      /prompt reset [tier] — 重置为内置默认（可方向键选择）
     """
     parts = args.split() if args else []
 
-    # /prompt — 概览
+    # 构建角色选项（共享）
+    tier_options = [(label, tier) for tier, label in _TIER_ZH.items()]
+
+    # /prompt — 方向键选择角色
     if not parts:
-        _show_prompt_overview()
+        selected = _interactive_select("选择角色查看提示词", tier_options)
+        if selected is None:
+            return
+        _show_single_prompt(selected)
         return
 
-    # /prompt edit <tier>
-    if parts[0] == "edit" and len(parts) >= 2:
-        tier = parts[1].lower()
-        if tier not in _TIER_ZH:
-            console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
-            console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
-            return
+    # /prompt edit [tier]
+    if parts[0] == "edit":
+        if len(parts) >= 2:
+            tier = parts[1].lower()
+            if tier not in _TIER_ZH:
+                console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
+                console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
+                return
+        else:
+            # 无 tier 参数，弹出选择器
+            selected = _interactive_select("选择角色编辑提示词", tier_options)
+            if selected is None:
+                return
+            tier = selected
         _edit_prompt(tier)
         return
 
-    # /prompt reset <tier>
-    if parts[0] == "reset" and len(parts) >= 2:
+    # /prompt reset [tier]
+    if parts[0] == "reset":
         from multimind.engine.roles import reset_custom_prompt
 
-        tier = parts[1].lower()
-        if tier not in _TIER_ZH:
-            console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
-            console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
-            return
+        if len(parts) >= 2:
+            tier = parts[1].lower()
+            if tier not in _TIER_ZH:
+                console.print(f"  [{C_ERROR}]✗ 未知角色: {tier}[/]")
+                console.print(f"  [{C_MUTED}]可选: leader, dispatcher, executor[/]\n")
+                return
+        else:
+            # 无 tier 参数，弹出选择器
+            selected = _interactive_select("选择角色重置提示词", tier_options)
+            if selected is None:
+                return
+            tier = selected
+
         deleted = reset_custom_prompt(tier)
         if deleted:
             console.print(f"  [{C_SUCCESS}]● 已重置 {_TIER_ZH[tier]} 的提示词为内置默认[/]")
@@ -1039,31 +1296,6 @@ def _handle_prompt(args: str, orchestrator: Orchestrator) -> None:
         return
 
     _show_single_prompt(tier)
-
-
-def _show_prompt_overview() -> None:
-    """显示所有角色提示词概览。"""
-    from multimind.engine.roles import get_effective_prompt, is_custom
-
-    console.print(f"\n  [{C_ACCENT}]角色提示词[/]")
-    console.print(f"  [{C_DIM}]{'─' * 48}[/]")
-
-    for tier, label in _TIER_ZH.items():
-        prompt = get_effective_prompt(tier)  # type: ignore[arg-type]
-        custom = is_custom(tier)  # type: ignore[arg-type]
-        status = f"[{C_WARNING}]自定义[/]" if custom else f"[{C_DIM}]默认[/]"
-        preview = prompt[:60].replace("\n", " ")
-        if len(prompt) > 60:
-            preview += "..."
-        console.print(
-            f"  [{C_TEXT}]{tier:<12}[/] {status}"
-            f"\n  [{C_DIM}]  {label}[/]"
-            f"\n  [{C_MUTED}]  {preview}[/]"
-        )
-
-    console.print(f"\n  [{C_DIM}]用法: /prompt <tier> 查看详情[/]")
-    console.print(f"  [{C_DIM}]      /prompt edit <tier> 编辑[/]")
-    console.print(f"  [{C_DIM}]      /prompt reset <tier> 重置[/]\n")
 
 
 def _show_single_prompt(tier: str) -> None:
