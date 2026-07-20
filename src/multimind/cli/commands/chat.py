@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import select
 import sys
 from datetime import datetime
 
@@ -523,6 +524,11 @@ def _interactive_select(
 
     Returns:
         选中的 value，取消则返回 None。
+
+    Note:
+        一次性进入 raw 模式读取按键，避免 tty 在 raw/cooked 之间反复
+        切换导致转义序列被回显；用 ``select`` 超时区分单独 ESC 与方向键
+        转义序列，重绘时完整重画整块（含标题与提示）避免残留光标。
     """
     if not options:
         console.print(f"  [{C_WARNING}]● 没有可选项[/]\n")
@@ -544,116 +550,152 @@ def _interactive_select(
             pass
         return None
 
-    selected = 0
     count = len(options)
+    selected = 0
+    total_lines = count + 2  # 标题 + 选项 + 提示
 
-    def render() -> None:
-        # 移动光标到选择区域开始处
+    # 尝试一次性进入 raw 模式；失败（如 Windows）则降级处理
+    fd = sys.stdin.fileno()
+    try:
+        import termios
+        import tty
+
+        old_attr = termios.tcgetattr(fd)
+        tty.setraw(fd)
+        raw = True
+    except (ImportError, ValueError, OSError):
+        old_attr = None
+        raw = False
+
+    def restore_term() -> None:
+        """恢复终端到进入选择器前的模式。"""
+        if old_attr is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+            except (ValueError, OSError):
+                pass
+
+    def emit_block() -> None:
+        """在「当前行 = 标题行」处完整重画整块（含标题与提示）。"""
         sys.stdout.write("\r\x1b[K")
         sys.stdout.write(f"\x1b[1;38;2;122;162;247m{title}\x1b[0m\n")
-
         for i, (label, _value) in enumerate(options):
             sys.stdout.write("\r\x1b[K")
             if i == selected:
-                sys.stdout.write(
-                    f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m"
-                )
+                sys.stdout.write(f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m\n")
             else:
-                sys.stdout.write(
-                    f"  \x1b[38;2;102;102;102m  {label}\x1b[0m"
-                )
-            sys.stdout.write("\n")
-
+                sys.stdout.write(f"  \x1b[38;2;102;102;102m  {label}\x1b[0m\n")
         sys.stdout.write("\r\x1b[K")
         sys.stdout.write(f"\x1b[38;2;68;68;68m  {hint}\x1b[0m")
         sys.stdout.flush()
 
-    def clear_render() -> None:
-        # 清除选择区域（标题 + 选项 + 提示行）
-        total_lines = count + 2  # 标题 + 选项 + 提示
-        sys.stdout.write(f"\x1b[{total_lines}A")
-        for _ in range(total_lines):
-            sys.stdout.write("\r\x1b[K\n")
-        sys.stdout.write(f"\x1b[{total_lines}A")
-        sys.stdout.flush()
+    def redraw() -> None:
+        """回到标题行并重画整块。"""
+        if raw:
+            sys.stdout.write(f"\x1b[{total_lines}A")
+        emit_block()
 
-    render()
+    def clear_block() -> None:
+        """清除整块选择区域。"""
+        if raw:
+            sys.stdout.write(f"\x1b[{total_lines}A")
+            for _ in range(total_lines):
+                sys.stdout.write("\r\x1b[K\n")
+            sys.stdout.write(f"\x1b[{total_lines}A")
+            sys.stdout.flush()
 
-    while True:
+    def read_key() -> str | None:
+        """读取单个按键，区分 ESC 与方向键。
+
+        Returns:
+            语义化按键名（"esc"/"up"/"down"/"left"/"right"）、
+            原始单字符、或 None（EOF）。
+        """
+        if raw:
+            ch = os.read(fd, 1)
+            if not ch:
+                return None
+            if ch == b"\x1b":
+                # 等待后续字节，区分单独 ESC 与转义序列（如方向键）
+                rlist, _, _ = select.select([fd], [], [], 0.15)
+                if not rlist:
+                    return "esc"
+                # 只读取紧随其后的「[」与最终字节，绝不吞噬后续按键
+                b2 = os.read(fd, 1)
+                if b2 == b"[":
+                    r3, _, _ = select.select([fd], [], [], 0.05)
+                    if not r3:
+                        return "esc"
+                    b3 = os.read(fd, 1)
+                    return {
+                        b"A": "up",
+                        b"B": "down",
+                        b"C": "left",
+                        b"D": "right",
+                    }.get(b3, "esc")
+                # Alt+组合键或其他转义，按 ESC 处理
+                return "esc"
+            return ch.decode("utf-8", errors="replace")
+
+        # 降级：使用逐字符读取（无 select 超时，ESC 无法可靠取消）
         char = _read_char()
         if char is None:
-            clear_render()
             return None
-
-        # 方向键
         if char == "\x1b":
             seq2 = _read_char()
             if seq2 == "[":
                 seq3 = _read_char()
-                if seq3 == "A":  # ↑
-                    selected = (selected - 1) % count
-                elif seq3 == "B":  # ↓
-                    selected = (selected + 1) % count
-                else:
-                    continue
-                # 重绘
-                sys.stdout.write(f"\x1b[{count + 1}A")
-                for i, (label, _value) in enumerate(options):
-                    sys.stdout.write("\r\x1b[K")
-                    if i == selected:
-                        sys.stdout.write(
-                            f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m\n"
-                        )
-                    else:
-                        sys.stdout.write(
-                            f"  \x1b[38;2;102;102;102m  {label}\x1b[0m\n"
-                        )
-                sys.stdout.flush()
-                continue
-            # 单独 ESC
-            if seq2 is None:
-                clear_render()
-                console.print(f"  [{C_MUTED}]已取消[/]\n")
+                return {"A": "up", "B": "down", "C": "left", "D": "right"}.get(
+                    seq3 or "", None
+                )
+            return "esc"
+        return char
+
+    try:
+        emit_block()  # 首次绘制（当前行即标题行）
+        while True:
+            key = read_key()
+            if key is None:
+                clear_block()
+                restore_term()
                 return None
-            continue
 
-        # Enter 确认
-        if char in ("\r", "\n"):
-            clear_render()
-            return options[selected][1]
-
-        # Ctrl+C / Ctrl+D
-        if char == "\x03":
-            raise KeyboardInterrupt
-        if char == "\x04":
-            clear_render()
-            return None
-
-        # q 退出
-        if char == "q":
-            clear_render()
-            console.print(f"  [{C_MUTED}]已取消[/]\n")
-            return None
-
-        # 数字快捷键
-        if char.isdigit():
-            idx = int(char) - 1
-            if 0 <= idx < count:
-                selected = idx
-                # 重绘
-                sys.stdout.write(f"\x1b[{count + 1}A")
-                for i, (label, _value) in enumerate(options):
-                    sys.stdout.write("\r\x1b[K")
-                    if i == selected:
-                        sys.stdout.write(
-                            f"  \x1b[1;38;2;122;162;247m▶ {label}\x1b[0m\n"
-                        )
-                    else:
-                        sys.stdout.write(
-                            f"  \x1b[38;2;102;102;102m  {label}\x1b[0m\n"
-                        )
-                sys.stdout.flush()
-                continue
+            if key == "up":
+                selected = (selected - 1) % count
+                redraw()
+            elif key == "down":
+                selected = (selected + 1) % count
+                redraw()
+            elif key == "esc":
+                clear_block()
+                console.print(f"  [{C_MUTED}]已取消[/]\n")
+                restore_term()
+                return None
+            elif key in ("\r", "\n"):
+                clear_block()
+                restore_term()
+                return options[selected][1]
+            elif key == "\x03":  # Ctrl+C
+                restore_term()
+                raise KeyboardInterrupt
+            elif key == "\x04":  # Ctrl+D
+                clear_block()
+                restore_term()
+                return None
+            elif key == "q":
+                clear_block()
+                console.print(f"  [{C_MUTED}]已取消[/]\n")
+                restore_term()
+                return None
+            elif key.isdigit():
+                idx = int(key) - 1
+                if 0 <= idx < count:
+                    selected = idx
+                    redraw()
+            # 其他按键（left/right 等）忽略
+    except KeyboardInterrupt:
+        restore_term()
+        raise
 
 
 def _print_user_message(text: str) -> None:
