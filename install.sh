@@ -240,6 +240,24 @@ success "  pip 可用"
 
 info "Step 3/6: 配置 Python 环境..."
 
+# 检测 PEP 668 externally-managed 环境（Debian/Ubuntu 24.04+ 等）
+IS_EXTERNALLY_MANAGED=false
+EM_MARKER=$($PYTHON -c "
+import sys, os
+marker = os.path.join(sys.prefix, 'EXTERNALLY-MANAGED')
+print(marker) if os.path.isfile(marker) else print('')
+" 2>/dev/null)
+if [ -n "$EM_MARKER" ]; then
+    IS_EXTERNALLY_MANAGED=true
+fi
+
+# 自动切换：externally-managed 或非 Termux 的系统 Python → 强制 venv
+if [ "$IS_EXTERNALLY_MANAGED" = true ] && [ "$USE_VENV" = false ] && [ "$IS_TERMUX" = false ]; then
+    warn "  检测到 externally-managed Python (PEP 668)"
+    warn "  自动启用虚拟环境以避免破坏系统包"
+    USE_VENV=true
+fi
+
 if [ "$USE_VENV" = true ]; then
     if [ -d "$MULTIMIND_VENV" ]; then
         info "  虚拟环境已存在: $MULTIMIND_VENV"
