@@ -255,11 +255,27 @@ if [ "$IS_EXTERNALLY_MANAGED" = true ] && [ "$USE_VENV" = false ] && [ "$IS_TERM
 fi
 
 if [ "$USE_VENV" = true ]; then
+    # 检查现有 venv 是否完整（有 activate 脚本和可用的 Python）
+    VENV_VALID=false
     if [ -d "$MULTIMIND_VENV" ]; then
+        if [ -f "$MULTIMIND_VENV/bin/activate" ] && [ -f "$MULTIMIND_VENV/bin/python" ]; then
+            VENV_VALID=true
+        fi
+    fi
+
+    if [ "$VENV_VALID" = true ]; then
         info "  虚拟环境已存在: $MULTIMIND_VENV"
     else
+        if [ -d "$MULTIMIND_VENV" ]; then
+            warn "  虚拟环境不完整，删除重建: $MULTIMIND_VENV"
+            rm -rf "$MULTIMIND_VENV"
+        fi
         info "  创建虚拟环境: $MULTIMIND_VENV..."
         $PYTHON -m venv "$MULTIMIND_VENV"
+        # 创建后再次验证
+        if [ ! -f "$MULTIMIND_VENV/bin/activate" ]; then
+            error "虚拟环境创建失败，请确认 python3-venv 已安装: sudo apt install python3.XY-venv"
+        fi
     fi
 
     # 激活虚拟环境
