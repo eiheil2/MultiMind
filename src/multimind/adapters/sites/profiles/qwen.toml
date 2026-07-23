@@ -1,0 +1,67 @@
+# 通义千问站点配置 — qwen.ai
+# 选择器需根据实际 DOM 结构验证后更新
+
+[site]
+name = "qwen"
+url = "https://qwen.ai"
+login_url = "https://qwen.ai/login"
+
+[selectors]
+input_box = "textarea.chat-input"
+send_button = "button.send-btn"
+response_container = "div.response-content"
+stop_button = "button.stop-generation"
+login_redirect = "div.login-prompt"
+mode_container = "div.feature-tags"
+
+[[modes]]
+name = "deep_thinking"
+label = "深度思考"
+selector = "div.feature-tags button:nth-child(1)"
+
+[[modes]]
+name = "web_search"
+label = "联网搜索"
+selector = "div.feature-tags button:nth-child(2)"
+
+[[modes]]
+name = "image_edit"
+label = "图片编辑"
+selector = "div.feature-tags button:nth-child(3)"
+
+[[modes]]
+name = "web_dev"
+label = "网页开发"
+selector = "div.feature-tags button:nth-child(4)"
+
+[[modes]]
+name = "image_gen"
+label = "图片生成"
+selector = "div.feature-tags button:nth-child(5)"
+
+[[modes]]
+name = "video_gen"
+label = "视频生成"
+selector = "div.feature-tags button:nth-child(6)"
+
+[safety]
+min_delay = 1.0
+max_delay = 3.0
+max_requests_per_session = 50
+session_timeout = 3600
+headed = true
+max_consecutive_errors = 5
+
+[completion]
+method = "stop_button_disappear"
+timeout = 150
+stable_duration = 2.5
+poll_interval = 0.4
+
+[capabilities]
+streaming = true
+file_upload = true
+multi_turn = true
+mode_switching = true
+max_input_length = 30000
+custom = ["image_generation", "video_generation", "code_execution"]

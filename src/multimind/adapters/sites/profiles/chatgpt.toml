@@ -1,0 +1,47 @@
+# ChatGPT 站点配置 — chatgpt.com
+# 选择器需根据实际 DOM 结构验证后更新
+
+[site]
+name = "chatgpt"
+url = "https://chatgpt.com"
+login_url = "https://chatgpt.com/auth/login"
+
+[selectors]
+input_box = "div#prompt-textarea"
+send_button = "button[data-testid='send-button']"
+response_container = "div.markdown.prose"
+stop_button = "button[data-testid='stop-button']"
+login_redirect = "div[data-testid='login-button']"
+mode_container = "div.mode-selector"
+
+[[modes]]
+name = "default"
+label = "GPT-4o"
+selector = "button[data-testid='model-selector']"
+
+[[modes]]
+name = "image_gen"
+label = "Generate Image"
+selector = "button[data-mode='image']"
+
+[safety]
+min_delay = 1.5
+max_delay = 4.0
+max_requests_per_session = 40
+session_timeout = 3600
+headed = true
+max_consecutive_errors = 3
+
+[completion]
+method = "stop_button_disappear"
+timeout = 180
+stable_duration = 3.0
+poll_interval = 0.5
+
+[capabilities]
+streaming = true
+file_upload = true
+multi_turn = true
+mode_switching = true
+max_input_length = 32000
+custom = ["image_generation", "code_interpreter"]

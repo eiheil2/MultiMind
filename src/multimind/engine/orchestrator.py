@@ -1,0 +1,264 @@
+"""编排引擎 — while-loop 内核 + 群聊总线 + 动态拓扑。
+
+核心设计（借鉴 Claude Code while-loop + Grok Build Coordinator）：
+- 每个角色的单轮交互是一个 ``while not done`` 循环。
+- Leader 循环 → Dispatcher 循环 → Executor 循环（可嵌套）。
+- 群聊总线串联所有角色循环，共享上下文。
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+from multimind.adapters.registry import ProviderRegistry, get_registry
+from multimind.core.exceptions import AdapterError
+from multimind.core.types import Message
+from multimind.engine.context import ContextBuilder
+from multimind.engine.groupchat import GroupChatBus, TopologyMode
+from multimind.engine.roles import Role, default_roles
+from multimind.engine.topology import TopologyManager
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+__all__ = ["Orchestrator", "OrchestratorEvent"]
+
+logger = logging.getLogger(__name__)
+
+
+class OrchestratorEvent:
+    """结构化事件 — 供 UI 层消费，而非原始文本。
+
+    使用类型标记区分事件类型，UI 层据此渲染不同的视觉元素。
+    """
+
+    # 事件类型
+    ROLE_START = "role_start"  # 角色开始处理
+    ROLE_CHUNK = "role_chunk"  # 角色输出片段
+    ROLE_END = "role_end"  # 角色完成
+    ROUND_END = "round_end"  # 一轮协作完成
+    ERROR = "error"  # 错误
+
+    def __init__(
+        self,
+        event_type: str,
+        role_name: str = "",
+        role_tier: str = "",
+        provider: str = "",
+        content: str = "",
+        round_num: int = 0,
+    ) -> None:
+        self.event_type = event_type
+        self.role_name = role_name
+        self.role_tier = role_tier
+        self.provider = provider
+        self.content = content
+        self.round_num = round_num
+
+    def __repr__(self) -> str:
+        return f"<OrchestratorEvent {self.event_type} role={self.role_name} round={self.round_num}>"
+
+
+class Orchestrator:
+    """编排引擎 — 驱动多角色群聊协作。
+
+    Attributes:
+        roles: 角色列表。
+        registry: Provider 注册表。
+        bus: 群聊消息总线。
+        topology: 拓扑管理器。
+        language: 回复语言（"zh" / "en"），影响 prompt 中的语言指令。
+    """
+
+    def __init__(
+        self,
+        roles: list[Role] | None = None,
+        registry: ProviderRegistry | None = None,
+        bus: GroupChatBus | None = None,
+        language: str = "zh",
+        context_builder: ContextBuilder | None = None,
+    ) -> None:
+        self.roles = roles or default_roles()
+        self.registry = registry or get_registry()
+        self.bus = bus or GroupChatBus()
+        self.topology = TopologyManager(self.bus)
+        self.language = language
+        self.context_builder = context_builder or ContextBuilder()
+
+    @property
+    def leaders(self) -> list[Role]:
+        """所有 Leader 角色列表。"""
+        return [r for r in self.roles if r.tier == "leader"]
+
+    @property
+    def dispatchers(self) -> list[Role]:
+        """所有 Dispatcher 角色列表。"""
+        return [r for r in self.roles if r.tier == "dispatcher"]
+
+    @property
+    def executors(self) -> list[Role]:
+        """所有 Executor 角色列表。"""
+        return [r for r in self.roles if r.tier == "executor"]
+
+    async def run(
+        self,
+        user_input: str,
+        max_rounds: int = 10,
+    ) -> AsyncIterator[OrchestratorEvent]:
+        """运行一轮群聊协作，产出结构化事件。
+
+        Args:
+            user_input: 用户输入。
+            max_rounds: 最大轮次上限。
+
+        Yields:
+            OrchestratorEvent 事件流。
+        """
+        # 用户消息入总线
+        await self.bus.broadcast("user", user_input)
+
+        for round_num in range(1, max_rounds + 1):
+            if self.topology.mode == TopologyMode.LAYERED:
+                # 分层模式：只跑 Leader
+                async for event in self._run_role_loop(self.leaders[0], user_input, round_num):
+                    yield event
+            else:
+                # 扁平模式：所有角色依次发言
+                for role in self.roles:
+                    async for event in self._run_role_loop(role, user_input, round_num):
+                        yield event
+
+            # 每轮协作完成后产出 ROUND_END 事件
+            yield OrchestratorEvent(
+                event_type=OrchestratorEvent.ROUND_END,
+                round_num=round_num,
+            )
+
+    async def _run_role_loop(
+        self,
+        role: Role,
+        task: str,
+        round_num: int,
+    ) -> AsyncIterator[OrchestratorEvent]:
+        """单角色 while-loop（观察→思考→发言→工具→再观察）。
+
+        Args:
+            role: 角色定义。
+            task: 当前任务。
+            round_num: 当前轮次。
+
+        Yields:
+            OrchestratorEvent 事件流。
+        """
+        provider = self.registry.get(role.provider)
+        if provider is None:
+            yield OrchestratorEvent(
+                event_type=OrchestratorEvent.ERROR,
+                role_name=role.name,
+                content=f"Provider '{role.provider}' not registered",
+            )
+            logger.error("Provider '%s' not registered for role '%s'", role.provider, role.name)
+            return
+
+        # 组装上下文：统一委托 ContextBuilder（L0/L1/L2 分层 + token 预算）
+        raw_context = self.bus.context_for(role.name)
+        context = self.context_builder.build(
+            raw_context,
+            query=task,
+            max_tokens=self._provider_max_tokens(role),
+        )
+        prompt = self._build_prompt(role, task, context)
+
+        # 角色开始事件
+        yield OrchestratorEvent(
+            event_type=OrchestratorEvent.ROLE_START,
+            role_name=role.name,
+            role_tier=role.tier,
+            provider=role.provider,
+            round_num=round_num,
+        )
+
+        collected: list[str] = []
+        try:
+            async for chunk in provider.ask(prompt, context):
+                collected.append(chunk)
+                yield OrchestratorEvent(
+                    event_type=OrchestratorEvent.ROLE_CHUNK,
+                    role_name=role.name,
+                    role_tier=role.tier,
+                    provider=role.provider,
+                    content=chunk,
+                    round_num=round_num,
+                )
+        except AdapterError as e:
+            yield OrchestratorEvent(
+                event_type=OrchestratorEvent.ERROR,
+                role_name=role.name,
+                content=str(e),
+            )
+            logger.exception("Adapter error for role %s", role.name)
+            return
+
+        full_reply = "".join(collected)
+        await self.bus.post(
+            Message(
+                role=role.name,
+                content=full_reply,
+                channel=role.provider,
+                mode=role.mode,
+            )
+        )
+
+        # 角色完成事件
+        yield OrchestratorEvent(
+            event_type=OrchestratorEvent.ROLE_END,
+            role_name=role.name,
+            role_tier=role.tier,
+            provider=role.provider,
+            round_num=round_num,
+        )
+
+    def _provider_max_tokens(self, role: Role) -> int:
+        """查询角色绑定 provider 的上下文窗口，预留输出空间。
+
+        从 ``ProviderConfig.max_tokens`` 读取窗口大小，预留 1/4 给模型输出，
+        剩余部分作为上下文预算交给 ``ContextBuilder``。provider 未注册时
+        回退到保守默认值。
+
+        Args:
+            role: 目标角色。
+
+        Returns:
+            上下文 token 预算（下限 256，避免预算过小导致空上下文）。
+        """
+        adapter = self.registry.get(role.provider)
+        window = adapter.config.max_tokens if adapter is not None else 8192
+        return max(256, int(window * 0.75))
+
+    def _build_prompt(self, role: Role, task: str, context: list[Message]) -> str:
+        """为角色构建完整 prompt（全英文系统提示 + 语言指令）。
+
+        Args:
+            role: 目标角色。
+            task: 当前任务。
+            context: 已由 :class:`ContextBuilder` 组装并裁剪的上下文
+                （不再在此做 ``[-N:]`` / ``[:N]`` 硬截断）。
+        """
+        prompt = f"[System Role]\n{role.prompt}\n\n"
+        prompt += f"[Task]\n{task}\n\n"
+
+        if context:
+            prompt += "[Chat History]\n"
+            for msg in context:
+                prompt += f"  {msg.role}: {msg.content}\n"
+
+        # 语言指令：提示词全英文，但要求按设置语言回复
+        lang_instruction = {
+            "zh": "Please respond in Chinese (中文).",
+            "en": "Please respond in English.",
+        }.get(self.language, "Please respond in Chinese (中文).")
+
+        prompt += f"\n[Response Language]\n{lang_instruction}\n"
+        prompt += f"\nPlease respond concisely as {role.name} (1-2 sentences):"
+        return prompt

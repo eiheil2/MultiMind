@@ -1,0 +1,67 @@
+# EditorConfig is awesome: https://editorconfig.org
+# Top-most EditorConfig file
+root = true
+
+# Default settings for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# Python source files
+[*.{py,pyi}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# YAML, TOML, JSON, and other config files use 2-space indentation
+[*.{yaml,yml,toml,json,ini,cfg}]
+indent_style = space
+indent_size = 2
+
+# Markdown and reStructuredText — keep trailing whitespace (two trailing spaces = line break)
+[*.{md,rst,markdown}]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Shell scripts
+[*.sh]
+indent_style = space
+indent_size = 4
+
+# Makefiles must use tabs
+[Makefile]
+indent_style = tab
+
+# Batch files use CRLF on Windows
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+# HTML, CSS, JavaScript, TypeScript
+[*.{html,css,js,ts,jsx,tsx,vue,svelte}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+# Jupyter notebooks
+[*.ipynb]
+indent_style = space
+indent_size = 4
+
+# Templates
+[*.{j2,jinja2,jinja}]
+indent_style = space
+indent_size = 2
+
+# Dockerfile
+[Dockerfile]
+indent_style = space
+indent_size = 4
+
+# License files — keep as-is
+[LICENSE]
+trim_trailing_whitespace = false

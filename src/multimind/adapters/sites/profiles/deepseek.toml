@@ -1,0 +1,47 @@
+# DeepSeek 站点配置 — chat.deepseek.com
+# 选择器需根据实际 DOM 结构验证后更新
+
+[site]
+name = "deepseek"
+url = "https://chat.deepseek.com"
+login_url = "https://chat.deepseek.com/sign_in"
+
+[selectors]
+input_box = "textarea#chat-input"
+send_button = "div._77e6e910 button"
+response_container = "div.ds-markdown"
+stop_button = "div._77e6e910 button[aria-label='Stop']"
+login_redirect = "div.login-container"
+mode_container = "div._77e6e910"
+
+[[modes]]
+name = "deep_thinking"
+label = "深度思考"
+selector = "div._77e6e910 button:nth-child(1)"
+
+[[modes]]
+name = "web_search"
+label = "联网搜索"
+selector = "div._77e6e910 button:nth-child(2)"
+
+[safety]
+min_delay = 1.0
+max_delay = 3.0
+max_requests_per_session = 50
+session_timeout = 3600
+headed = true
+max_consecutive_errors = 5
+
+[completion]
+method = "stop_button_disappear"
+timeout = 120
+stable_duration = 2.0
+poll_interval = 0.3
+
+[capabilities]
+streaming = true
+file_upload = false
+multi_turn = true
+mode_switching = true
+max_input_length = 32000
+custom = []

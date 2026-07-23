@@ -1,0 +1,47 @@
+# KIMI 站点配置 — kimi.com
+# 选择器需根据实际 DOM 结构验证后更新
+
+[site]
+name = "kimi"
+url = "https://kimi.moonshot.cn"
+login_url = "https://kimi.moonshot.cn/login"
+
+[selectors]
+input_box = "textarea.chat-input"
+send_button = "button.send-button"
+response_container = "div.markdown-body"
+stop_button = "button.stop-button"
+login_redirect = "div.login-container"
+mode_container = "div.template-selector"
+
+[[modes]]
+name = "chat"
+label = "对话"
+selector = "div.template-selector button:nth-child(1)"
+
+[[modes]]
+name = "ppt"
+label = "PPT 生成"
+selector = "div.template-selector button:nth-child(2)"
+
+[safety]
+min_delay = 1.5
+max_delay = 4.0
+max_requests_per_session = 30
+session_timeout = 3600
+headed = true
+max_consecutive_errors = 3
+
+[completion]
+method = "response_stable"
+timeout = 300
+stable_duration = 5.0
+poll_interval = 1.0
+
+[capabilities]
+streaming = true
+file_upload = true
+multi_turn = true
+mode_switching = true
+max_input_length = 200000
+custom = ["ppt_generation", "long_context"]
