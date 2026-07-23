@@ -242,12 +242,8 @@ info "Step 3/6: 配置 Python 环境..."
 
 # 检测 PEP 668 externally-managed 环境（Debian/Ubuntu 24.04+ 等）
 IS_EXTERNALLY_MANAGED=false
-EM_MARKER=$($PYTHON -c "
-import sys, os
-marker = os.path.join(sys.prefix, 'EXTERNALLY-MANAGED')
-print(marker) if os.path.isfile(marker) else print('')
-" 2>/dev/null)
-if [ -n "$EM_MARKER" ]; then
+EM_STDLIB=$($PYTHON -c "import sysconfig; print(sysconfig.get_path('stdlib'))" 2>/dev/null)
+if [ -n "$EM_STDLIB" ] && [ -f "${EM_STDLIB}/EXTERNALLY-MANAGED" ]; then
     IS_EXTERNALLY_MANAGED=true
 fi
 
