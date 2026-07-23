@@ -104,10 +104,13 @@ comfort of your terminal.
 
 ## Quick Start
 
-Install MultiMind from PyPI:
+Clone the repository and install from source (the PyPI `multimind` package
+is **not** this project):
 
 ```bash
-pip install multimind
+git clone https://github.com/eiheil2/MultiMind.git
+cd MultiMind
+pip install -e .
 ```
 
 Launch the TUI and start a multi-AI chat session:
